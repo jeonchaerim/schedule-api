@@ -15,8 +15,9 @@ spring:
     properties:
       hibernate:
         format_sql: true
+    open-in-view: true   # 지금은 의도적으로 켜둠 (N+1 재현용)
 
 logging:
   level:
-    org.hibernate.SQL: debug
-    org.hibernate.orm.jdbc.bind: trace
+    org.hibernate.SQL: debug # ← SQL 문 자체
+    org.hibernate.orm.jdbc.bind: trace # ← ? 에 들어간 실제 값
