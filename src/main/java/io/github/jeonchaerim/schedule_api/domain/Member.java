@@ -12,7 +12,7 @@ import lombok.NoArgsConstructor;
 // member.class 방식으로 만드는거지 new member로 빈 객체 생성을 막기 위하여 public은 지양
 public class Member extends BaseTimeEntity {
 
-    @Id // PK
+    @Id // PK . 그리고 프록시일 경우 이 ID 값을 들고 기다리고있음
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     // PK 생성을 DB auto_increment에 위임
     // DB에 INSERT를 해야 PK를 알 수 있어 persist() 시점에 즉시 INSERT 발생 (쓰기 지연 X)

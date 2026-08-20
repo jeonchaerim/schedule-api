@@ -14,6 +14,7 @@ public class ScheduleController {
 
     private final ScheduleRepository scheduleRepository;
 
+    // n+1
     @GetMapping("/schedules")
     public List<ScheduleResponse> getSchedules() {
         long start = System.currentTimeMillis();          // ← 메서드 안, 맨 위
@@ -24,6 +25,22 @@ public class ScheduleController {
 
         System.out.println(">>> 소요시간: "
                 + (System.currentTimeMillis() - start) + "ms");   // ← return 전
+
+        return result;
+    }
+
+    // fetch join 용
+    @GetMapping("/schedules/fetch")
+    public List<ScheduleResponse> getSchedulesWithFetch() {
+        long start = System.currentTimeMillis();
+
+        List<ScheduleResponse> result = scheduleRepository
+                .findAllWithMemberAndCategory().stream()
+                .map(ScheduleResponse::from)
+                .toList();
+
+        System.out.println(">>> [FETCH JOIN] 소요시간: "
+                + (System.currentTimeMillis() - start) + "ms");
 
         return result;
     }

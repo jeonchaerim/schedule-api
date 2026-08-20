@@ -1,0 +1,29 @@
+2026-08-20T15:27:35.970+09:00 DEBUG 85894 --- [schedule-api] [nio-8080-exec-4] org.hibernate.SQL                        :
+    select
+        s1_0.schedule_id,
+        c1_0.category_id,
+        c1_0.color,
+        c1_0.created_at,
+        c1_0.name,
+        c1_0.updated_at,
+        s1_0.content,
+        s1_0.created_at,
+        s1_0.end_at,
+        s1_0.member_id,
+        m1_0.member_id,
+        m1_0.created_at,
+        m1_0.email,
+        m1_0.name,
+        m1_0.updated_at,
+        s1_0.start_at,
+        s1_0.title,
+        s1_0.updated_at
+    from
+        schedule s1_0
+    join
+        member m1_0
+            on m1_0.member_id=s1_0.member_id
+    join
+        category c1_0
+            on c1_0.category_id=s1_0.category_id
+>>> [FETCH JOIN] 소요시간: 900ms
