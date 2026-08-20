@@ -76,10 +76,13 @@ GET /schedules 호출 시 SELECT 1,003회 / 소요 시간 2,431ms
 
 | | 쿼리 수 | 소요 시간 |
 | --- | --- | --- |
-| 지연 로딩 (GET /schedules) | 1,003회 | 2,431ms |
-| Fetch Join (GET /schedules/fetch) | 1회 | 900ms |
+| 지연 로딩 | 1,003회 | 2,431ms |
+| 지연 로딩 + readOnly | 1,003회 | 676ms |
+| Fetch Join + readOnly | 1회 | 82ms |
 
-쿼리 99.9% 감소, 응답 시간 약 63% 단축
+**최종: 쿼리 1,003회 → 1회, 응답 2,431ms → 82ms (약 30배 단축)**
+
+※ 측정 과정은 아래 "남은 900ms에 대하여" → "readOnly 적용 후 재측정" 순서로 기록
 
 ### 실행된 SQL
 ```sql
@@ -140,10 +143,24 @@ Member$HibernateProxy extends Member
 
 ---
 
-### 남은 900ms에 대하여
+### 중간 측정 — Fetch Join만 적용했을 때 (900ms)
 - 쿼리는 99.9% 줄었는데 시간은 63%만 단축된 이유:
   **H2 인메모리는 네트워크·디스크 I/O가 없어 쿼리 1건당 비용이 매우 낮음**
   → 실제 DB에서는 쿼리당 네트워크 왕복이 붙어 격차가 훨씬 클 것으로 예상
 - 남은 900ms는 쿼리가 아니라 **2,000건의 엔티티 생성 · 영속성 컨텍스트 등록(스냅샷 포함) · DTO 변환 · JSON 직렬화** 비용
 - 이 구간은 Fetch Join으로 줄지 않음 → 페이징, DTO 직접 조회, `@Transactional(readOnly = true)`가 필요한 영역
 - 조회 전용이면 Dirty Checking을 위한 스냅샷이 불필요하므로 `readOnly = true`로 그 비용을 제거할 수 있음
+
+### @Transactional(readOnly = true) 적용 후 재측정
+
+| | 쿼리 수 | 소요 시간 |
+| --- | --- | --- |
+| 지연 로딩 (readOnly 미적용) | 1,003회 | 2,431ms |
+| 지연 로딩 + readOnly | 1,003회 | 676ms |
+| Fetch Join + readOnly | 1회 | 82ms |
+
+- readOnly만으로 72% 단축 → Dirty Checking용 스냅샷 저장 비용이 2,000건 기준 상당했음
+- 스냅샷 비용을 제거하자 Fetch Join의 효과가 더 선명해짐 (676ms → 82ms, 88% 단축)
+- 어제는 "H2 인메모리라 쿼리당 비용이 낮아 63%만 단축됐다"고 해석했으나,
+  실제로는 스냅샷 비용이 시간을 점유해 쿼리 개선 효과가 가려져 있었음
+- 최종: 2,431ms → 82ms (약 30배), 쿼리 1,003회 → 1회

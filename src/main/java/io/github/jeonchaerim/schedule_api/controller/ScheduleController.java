@@ -2,6 +2,7 @@ package io.github.jeonchaerim.schedule_api.controller;
 
 import io.github.jeonchaerim.schedule_api.dto.ScheduleResponse;
 import io.github.jeonchaerim.schedule_api.repository.ScheduleRepository;
+import io.github.jeonchaerim.schedule_api.service.ScheduleService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -12,36 +13,21 @@ import java.util.List;
 @RequiredArgsConstructor
 public class ScheduleController {
 
-    private final ScheduleRepository scheduleRepository;
+    private final ScheduleService scheduleService;   // ← Repository 대신
 
-    // n+1
     @GetMapping("/schedules")
     public List<ScheduleResponse> getSchedules() {
-        long start = System.currentTimeMillis();          // ← 메서드 안, 맨 위
-
-        List<ScheduleResponse> result = scheduleRepository.findAll().stream()
-                .map(ScheduleResponse::from)
-                .toList();
-
-        System.out.println(">>> 소요시간: "
-                + (System.currentTimeMillis() - start) + "ms");   // ← return 전
-
+        long start = System.currentTimeMillis();
+        List<ScheduleResponse> result = scheduleService.findAll();
+        System.out.println(">>> [LAZY] 소요시간: " + (System.currentTimeMillis() - start) + "ms");
         return result;
     }
 
-    // fetch join 용
     @GetMapping("/schedules/fetch")
     public List<ScheduleResponse> getSchedulesWithFetch() {
         long start = System.currentTimeMillis();
-
-        List<ScheduleResponse> result = scheduleRepository
-                .findAllWithMemberAndCategory().stream()
-                .map(ScheduleResponse::from)
-                .toList();
-
-        System.out.println(">>> [FETCH JOIN] 소요시간: "
-                + (System.currentTimeMillis() - start) + "ms");
-
+        List<ScheduleResponse> result = scheduleService.findAllWithFetch();
+        System.out.println(">>> [FETCH JOIN] 소요시간: " + (System.currentTimeMillis() - start) + "ms");
         return result;
     }
 }
