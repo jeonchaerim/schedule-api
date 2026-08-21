@@ -164,3 +164,51 @@ Member$HibernateProxy extends Member
 - 어제는 "H2 인메모리라 쿼리당 비용이 낮아 63%만 단축됐다"고 해석했으나,
   실제로는 스냅샷 비용이 시간을 점유해 쿼리 개선 효과가 가려져 있었음
 - 최종: 2,431ms → 82ms (약 30배), 쿼리 1,003회 → 1회
+
+---
+2026-08-21 (금) — Dirty Checking / CRUD
+---
+
+### 한 것
+- Schedule 엔티티에 update() 메서드 추가 (setter 대신)
+- ScheduleService에 create / update / delete 추가
+- ScheduleCreateRequest, ScheduleUpdateRequest DTO 분리
+- POST / PUT / DELETE 엔드포인트 추가
+
+### Dirty Checking 확인
+- save() 호출 없이 UPDATE 쿼리 발생 확인
+- @LastModifiedDate로 updated_at만 갱신되고 created_at은 유지되는 것을 H2에서 확인
+- 등록 시에는 created_at과 updated_at이 동일하게 들어감
+
+### 기본 UPDATE는 전체 필드
+변경하지 않은 컬럼(member_id, created_at)까지 SET 절에 포함됨
+→ 쿼리 문자열을 재사용해 파싱 비용·실행계획 캐시 이점을 얻기 위한 하이버네이트 기본 동작
+
+@DynamicUpdate 적용 후:
+```sql
+update schedule
+set content=?, end_at=?, start_at=?, title=?, updated_at=?
+where schedule_id=?
+```
+변경된 필드만 SET 절에 포함되는 것 확인
+
+### CRUD 동작 확인
+| 메서드 | 엔드포인트 | 확인 내용 |
+| --- | --- | --- |
+| POST | /schedules | 생성된 id(2001) 반환, save() 시점에 즉시 INSERT |
+| PUT | /schedules/{id} | save() 없이 UPDATE, updated_at 갱신 |
+| DELETE | /schedules/{id} | findById 후 delete, H2에서 삭제 확인 |
+
+- IDENTITY 전략이라 save() 순간 바로 INSERT (쓰기 지연 미적용)
+- delete도 SELECT가 먼저 나감 — 영속 상태로 만들어야 삭제 대상으로 관리되기 때문
+
+### 배운 것
+- @Transactional이 없으면 commit이 일어나지 않아 flush·스냅샷 비교 시점 자체가 없음 → UPDATE 미발생
+- 조회 후 메서드를 벗어나면 준영속 상태가 되어 변경 감지 대상에서 제외됨
+- setter 대신 의미 단위 메서드를 여는 이유: 변경 지점 추적 가능, 검증 로직 삽입 가능, 도메인 의도가 드러남
+- JPA는 FK 값(Long)이 아니라 연관 객체를 요구하므로, categoryId를 받아 조회 후 객체로 변환해 전달
+  (getReferenceById를 쓰면 프록시만 만들어 SELECT를 생략할 수 있으나 존재 검증이 불가)
+
+### 남은 것
+- 예외 처리 미적용 — 없는 id 조회 시 IllegalArgumentException이 500으로 나감
+  (@RestControllerAdvice로 400 변환은 여유 시 진행)

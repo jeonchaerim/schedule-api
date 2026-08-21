@@ -5,12 +5,14 @@ import lombok.AccessLevel;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.DynamicUpdate;
 
 import java.time.LocalDateTime;
 
 @Entity
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
+//@DynamicUpdate      // ← 변경된 필드만 UPDATE
 public class Schedule extends BaseTimeEntity {
 
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -50,6 +52,15 @@ public class Schedule extends BaseTimeEntity {
         this.startAt = startAt;
         this.endAt = endAt;
         this.member = member;
+        this.category = category;
+    }
+
+    public void update(String title, String content,
+                       LocalDateTime startAt, LocalDateTime endAt, Category category) {
+        this.title = title;
+        this.content = content;
+        this.startAt = startAt;
+        this.endAt = endAt;
         this.category = category;
     }
 }
