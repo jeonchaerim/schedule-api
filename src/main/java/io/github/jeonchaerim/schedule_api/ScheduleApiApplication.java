@@ -2,8 +2,10 @@ package io.github.jeonchaerim.schedule_api;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 
+@EnableCaching    // Redis
 @SpringBootApplication
 @EnableJpaAuditing	// 이걸 안붙이면 리스너가 등록이 안되서 createdDt가 null로 들어감
 // Auditing기능 자체를 켜는 것

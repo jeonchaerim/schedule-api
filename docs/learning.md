@@ -212,3 +212,48 @@ where schedule_id=?
 ### 남은 것
 - 예외 처리 미적용 — 없는 id 조회 시 IllegalArgumentException이 500으로 나감
   (@RestControllerAdvice로 400 변환은 여유 시 진행)
+
+
+---
+2026-08-24 (월) — Redis 캐시 적용
+---
+
+### 한 것
+- Redis 설치 및 Spring Cache 연동
+- 조회 API에 @Cacheable 적용, 캐시 HIT/MISS 확인
+
+### 측정 결과
+| | 쿼리 수 | 소요 시간 |
+| --- | --- | --- |
+| 1번째 호출 (캐시 MISS) | 1회 | 1,676ms |
+| 2번째 호출 (캐시 HIT) | **0회** | 175ms |
+
+캐시 HIT 시 메서드 자체가 실행되지 않아 SQL이 발생하지 않음
+
+### 캐시 동작 원리
+- @Cacheable이 붙으면 스프링이 프록시로 메서드를 감쌈 (@Transactional과 동일한 패턴)
+- 호출 시 Redis에 `schedules::all` 키 존재 여부 확인
+  - 있으면(HIT) 메서드 실행 없이 캐시 값 반환
+  - 없으면(MISS) 메서드 실행 → 결과를 Redis에 저장 → 반환
+- 캐시 이름(value)과 키(key)를 `::`로 연결해 실제 Redis 키가 생성됨
+- 1차 캐시와의 차이: 1차 캐시는 트랜잭션 범위·JVM 내부, Redis는 애플리케이션 전체·서버 간 공유
+
+### 애로사항
+- **brew install redis 실패** — macOS 12는 Homebrew 지원 대상에서 제외되어 bottle이 없고,
+  의존성 20개(llvm, rust, python)를 전부 소스 컴파일하려 함
+  → Redis 본체는 C로 외부 의존성이 거의 없다는 점을 확인하고 소스 직접 빌드로 우회
+  → 부가 모듈(redisbloom/search/json/timeseries)은 빌드 실패했으나 캐시 용도에 불필요하여 무시
+
+- **CacheManager 빈 미생성** — @EnableCaching과 spring-boot-starter-data-redis가 모두 있는데도
+  "No qualifying bean of type CacheManager" 발생
+  → debug: true로 CONDITIONS EVALUATION REPORT 확인 결과 CacheAutoConfiguration이
+  Positive/Negative 어느 쪽에도 없음 = 자동설정 클래스 자체가 존재하지 않음
+  → Spring Boot 4.1에서 캐시 자동설정이 분리된 것으로 판단, RedisCacheManager를 직접 빈 등록
+
+- **역직렬화 실패** — JSON 직렬화 시도 중 Cannot cast LinkedHashMap to ScheduleResponse
+  → JSON에는 원래 타입 정보가 없어 복원이 불가. activateDefaultTyping으로 타입을 함께 저장해야 함
+  → Jackson 3(tools.jackson)로 전환되며 클래스·enum 값이 달라져 설정에 시간 소요
+  → 캐시 동작 검증이 목적이므로 JDK 기본 직렬화(Serializable)로 전환하여 해결
+
+- 직렬화 방식 변경 후 기존 캐시와 형식이 불일치해 예외 발생
+  → flushall로 제거. 실무에서 직렬화 방식 변경 시 배포와 함께 캐시 무효화가 필요함을 확인

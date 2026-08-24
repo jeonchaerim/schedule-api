@@ -10,10 +10,12 @@ import io.github.jeonchaerim.schedule_api.repository.CategoryRepository;
 import io.github.jeonchaerim.schedule_api.repository.MemberRepository;
 import io.github.jeonchaerim.schedule_api.repository.ScheduleRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -34,10 +36,13 @@ public class ScheduleService {
     }
 
     /** Fetch Join 적용 */
+    // 요청이 들어오면 proxy객체로 감싸서, schedules::all (키이름::값)
+    // 이 있는지 확인하여 메서드 실행 유무를 판단해서 Reids 캐시에서 꺼내쓸수 있는지 결정 (HIT or MISS)
+    @Cacheable(value = "schedules", key = "'all'")
     public List<ScheduleResponse> findAllWithFetch() {
         return scheduleRepository.findAllWithMemberAndCategory().stream()
                 .map(ScheduleResponse::from)
-                .toList();
+                .collect(Collectors.toList());   // ← .toList() 대신
     }
 
     @Transactional
