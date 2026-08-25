@@ -257,3 +257,32 @@ where schedule_id=?
 
 - 직렬화 방식 변경 후 기존 캐시와 형식이 불일치해 예외 발생
   → flushall로 제거. 실무에서 직렬화 방식 변경 시 배포와 함께 캐시 무효화가 필요함을 확인
+
+
+---
+2026-08-25 (화) — 캐시 무효화 (@CacheEvict)
+---
+
+### 한 것
+- create / update / delete에 @CacheEvict 적용
+
+### 확인 결과
+| 동작 | Redis 키 | SQL |
+| --- | --- | --- |
+| 1차 조회 | schedules::all 생성 | 발생 |
+| 2차 조회 | 유지 | 미발생 (HIT) |
+| 수정(PUT) | **삭제됨** | UPDATE 발생 |
+| 3차 조회 | 재생성 | 다시 발생 (MISS) |
+
+- TTL 확인: `redis-cli ttl "schedules::all"` → 600초에서 카운트다운
+
+### 배운 것
+- 캐시는 DB와 별개 저장소라 데이터 변경 시 자동 반영되지 않음
+  → TTL만으로는 만료 전까지 낡은 데이터가 응답됨
+- @CacheEvict는 메서드 정상 종료 후 실행됨 (예외 시 캐시 유지 — 롤백된 DB와 일관)
+- TTL은 보조 안전장치, @CacheEvict가 주 방어선
+
+### 애로사항
+- 로컬 Redis를 &로 백그라운드 실행해 터미널 종료 시 함께 종료됨
+  → Connection refused 발생. --daemonize yes로 전환
+- 캐시 서버 장애 시 현재는 500 응답 — 실무에서는 DB 폴백 처리가 필요한 지점

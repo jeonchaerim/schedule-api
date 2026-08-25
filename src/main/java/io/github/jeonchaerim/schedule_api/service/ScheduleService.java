@@ -10,6 +10,7 @@ import io.github.jeonchaerim.schedule_api.repository.CategoryRepository;
 import io.github.jeonchaerim.schedule_api.repository.MemberRepository;
 import io.github.jeonchaerim.schedule_api.repository.ScheduleRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -36,8 +37,10 @@ public class ScheduleService {
     }
 
     /** Fetch Join 적용 */
-    // 요청이 들어오면 proxy객체로 감싸서, schedules::all (키이름::값)
+    // @Cacheable
+    // 1. 요청이 들어오면 proxy객체로 감싸서, schedules::all (키이름::값)
     // 이 있는지 확인하여 메서드 실행 유무를 판단해서 Reids 캐시에서 꺼내쓸수 있는지 결정 (HIT or MISS)
+    // 2. 있으면 꺼내 쓰고 없으면 채워라
     @Cacheable(value = "schedules", key = "'all'")
     public List<ScheduleResponse> findAllWithFetch() {
         return scheduleRepository.findAllWithMemberAndCategory().stream()
@@ -45,6 +48,10 @@ public class ScheduleService {
                 .collect(Collectors.toList());   // ← .toList() 대신
     }
 
+    // @CacheEvict
+    // 1. 데이터가 바뀌면 캐시를 지워라
+    // 2. 메서드가 정상 종료된 후 실행돼. 예외가 나면 캐시를 안 지워 — 트랜잭션이 롤백됐으니 DB도 안 바뀌었을 테고, 그럼 캐시도 유지해야함
+    @CacheEvict(value = "schedules", key = "'all'")
     @Transactional
     public Long create(ScheduleCreateRequest request) {
         Member member = memberRepository.findById(request.memberId())
@@ -65,7 +72,7 @@ public class ScheduleService {
         return scheduleRepository.save(schedule).getId();
     }
 
-
+    @CacheEvict(value = "schedules", key = "'all'")
     // controller에서 proxy 호출할때 commit + rollback
     @Transactional      // ← readOnly 아님! 클래스 기본값을 덮어씀
     public void update(Long id, ScheduleUpdateRequest request) {
@@ -84,6 +91,7 @@ public class ScheduleService {
         // save() 안 부름 ← 여기가 포인트
     }
 
+    @CacheEvict(value = "schedules", key = "'all'")
     @Transactional
     public void delete(Long id) {
         Schedule schedule = scheduleRepository.findById(id)
