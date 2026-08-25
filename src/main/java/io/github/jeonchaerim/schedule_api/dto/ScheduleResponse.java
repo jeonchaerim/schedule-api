@@ -12,8 +12,8 @@ public record ScheduleResponse(
         return new ScheduleResponse(
                 schedule.getId(),
                 schedule.getTitle(),
-                schedule.getMember().getName(),      // ← 프록시 초기화 발생
-                schedule.getCategory().getName()     // ← 여기도
+                schedule.getMember().getName(),
+                schedule.getCategory() == null ? null : schedule.getCategory().getName()
         );
     }
 }

@@ -11,7 +11,7 @@ public interface ScheduleRepository extends JpaRepository<Schedule, Long> {
    // 직접 명시
     @Query("select s from Schedule s " +
             "join fetch s.member " +
-            "join fetch s.category")
+            "left join fetch s.category")
     List<Schedule> findAllWithMemberAndCategory();
 
     /*

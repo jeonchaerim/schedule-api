@@ -286,3 +286,11 @@ where schedule_id=?
 - 로컬 Redis를 &로 백그라운드 실행해 터미널 종료 시 함께 종료됨
   → Connection refused 발생. --daemonize yes로 전환
 - 캐시 서버 장애 시 현재는 500 응답 — 실무에서는 DB 폴백 처리가 필요한 지점
+
+### 코드 보완
+- category는 nullable로 설계했는데 join fetch(inner join)를 사용해
+  카테고리가 없는 일정이 조회 결과에서 누락되는 문제 확인
+  → categoryId 없이 등록한 일정이 목록에 나타나지 않음 (저장은 되었으나 조회 불가)
+- left join fetch로 변경하여 해결
+- 이에 따라 ScheduleResponse.from()에서 category null 방어 추가
+- 스키마(null 허용) · 쿼리(left join) · DTO(null 방어)가 한 세트로 맞아야 함
