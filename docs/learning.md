@@ -314,3 +314,18 @@ where schedule_id=?
 ### 남은 것
 - 예외 처리 미적용 — IllegalArgumentException이 500으로 나감 (8/26 예정)
 - 기간 검증 없음 — startAt > endAt도 저장됨 (8/26 예정)
+
+### 예외 처리 및 검증
+- @RestControllerAdvice로 전역 예외 처리기 추가
+  → IllegalArgumentException을 400 + {"message": "..."} 로 변환
+  → 기존 500 + 스택트레이스 노출 문제 해결 (내부 구조·라이브러리 버전 노출 방지)
+- Schedule 엔티티 생성자·update()에 기간 검증(validatePeriod) 추가
+  → startAt > endAt 인 경우 저장 자체를 차단
+
+- 역할 분리: 엔티티는 "잘못된 값"만 판단하고 던지고(throw),
+  HTTP 응답 코드 변환은 GlobalExceptionHandler가 담당
+  → 엔티티는 웹 계층을 몰라도 되고, 배치 등 다른 진입점에서도 동일하게 동작
+- setter 대신 update() 메서드를 둔 실질적 이유:
+  setter는 필드를 하나씩 바꿔 중간에 startAt > endAt 인 상태가 생길 수 있고,
+  검증 시점에 비교할 다른 필드가 아직 옛 값이라 순서에 따라 결과가 달라짐
+  → 변경할 값을 한 번에 받아야 새 값끼리 검증 가능

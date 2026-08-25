@@ -47,6 +47,7 @@ public class Schedule extends BaseTimeEntity {
     @Builder
     public Schedule(String title, String content, LocalDateTime startAt,
                     LocalDateTime endAt, Member member, Category category) {
+        validatePeriod(startAt, endAt);
         this.title = title;
         this.content = content;
         this.startAt = startAt;
@@ -57,10 +58,17 @@ public class Schedule extends BaseTimeEntity {
 
     public void update(String title, String content,
                        LocalDateTime startAt, LocalDateTime endAt, Category category) {
+        validatePeriod(startAt, endAt);
         this.title = title;
         this.content = content;
         this.startAt = startAt;
         this.endAt = endAt;
         this.category = category;
+    }
+
+    private void validatePeriod(LocalDateTime startAt, LocalDateTime endAt) {
+        if (startAt.isAfter(endAt)) {
+            throw new IllegalArgumentException("시작 시간이 종료 시간보다 늦을 수 없습니다.");
+        }
     }
 }
