@@ -260,13 +260,16 @@ where schedule_id=?
 
 
 ---
-2026-08-25 (화) — 캐시 무효화 (@CacheEvict)
+2026-08-25 (화) — 캐시 무효화 / 코드 보완 / Swagger
 ---
 
 ### 한 것
 - create / update / delete에 @CacheEvict 적용
+- join fetch → left join fetch 수정 및 null 방어 추가
+- Swagger(springdoc-openapi) 적용
+- application.yml 진단용 설정 정리
 
-### 확인 결과
+### 캐시 무효화 확인 결과
 | 동작 | Redis 키 | SQL |
 | --- | --- | --- |
 | 1차 조회 | schedules::all 생성 | 발생 |
@@ -281,16 +284,33 @@ where schedule_id=?
   → TTL만으로는 만료 전까지 낡은 데이터가 응답됨
 - @CacheEvict는 메서드 정상 종료 후 실행됨 (예외 시 캐시 유지 — 롤백된 DB와 일관)
 - TTL은 보조 안전장치, @CacheEvict가 주 방어선
+- Dirty Checking은 수정에만 해당. 등록은 save(), 삭제는 delete()를 명시적으로 호출해야 하고
+  수정만 유일하게 메서드 호출 없이 커밋 시점에 UPDATE가 발생
+
+### 코드 보완 — left join fetch
+- category는 nullable로 설계했는데 join fetch(inner join)를 사용해
+  카테고리가 없는 일정이 조회 결과에서 누락되는 문제 확인
+  → categoryId 없이 등록한 일정이 목록에 나타나지 않음 (저장은 되었으나 조회 불가)
+- left join fetch로 변경하여 해결
+- 이에 따라 ScheduleResponse.from()에서 category null 방어 추가 (NullPointerException 방지)
+- 스키마(null 허용) · 쿼리(left join) · DTO(null 방어)가 한 세트로 맞아야 함
+
+### Swagger 적용
+- springdoc-openapi로 API 문서 자동 생성 (/swagger-ui/index.html)
+- @Tag / @Operation으로 엔드포인트 설명, @Schema로 요청 DTO 예시값 지정
+- /schedules(지연 로딩)와 /schedules/fetch(Fetch Join + 캐시)를 나란히 노출해
+  N+1 비교 목적이 문서에서 드러나도록 구성
+- REST 규약: 자원은 URL(명사), 동작은 HTTP 메서드로 표현
+  POST /schedules(생성) · PUT /schedules/{id}(수정) · DELETE /schedules/{id}(삭제)
+  ※ /schedules/fetch는 성능 비교를 위해 의도적으로 분리한 엔드포인트
 
 ### 애로사항
 - 로컬 Redis를 &로 백그라운드 실행해 터미널 종료 시 함께 종료됨
   → Connection refused 발생. --daemonize yes로 전환
 - 캐시 서버 장애 시 현재는 500 응답 — 실무에서는 DB 폴백 처리가 필요한 지점
+- @Schema 미지정 시 Long 필드에 9007199254740991(JS 안전 정수 최댓값)이 예시로 채워져
+  그대로 실행하면 "카테고리를 찾을 수 없습니다" 발생 → example 지정으로 해결
 
-### 코드 보완
-- category는 nullable로 설계했는데 join fetch(inner join)를 사용해
-  카테고리가 없는 일정이 조회 결과에서 누락되는 문제 확인
-  → categoryId 없이 등록한 일정이 목록에 나타나지 않음 (저장은 되었으나 조회 불가)
-- left join fetch로 변경하여 해결
-- 이에 따라 ScheduleResponse.from()에서 category null 방어 추가
-- 스키마(null 허용) · 쿼리(left join) · DTO(null 방어)가 한 세트로 맞아야 함
+### 남은 것
+- 예외 처리 미적용 — IllegalArgumentException이 500으로 나감 (8/26 예정)
+- 기간 검증 없음 — startAt > endAt도 저장됨 (8/26 예정)
