@@ -192,8 +192,27 @@ kill -9 <PID>
 
 ## 성능 개선 결과
 
-*(작성 예정)*
+**측정 조건** — 회원 1,000명 / 일정 2,000건, H2 인메모리
+
+| 단계 | 조회 쿼리 수 | 소요 시간 |
+| --- | --- | --- |
+| 지연 로딩 (`GET /schedules`) | **1,003회** | 약 300ms |
+| Fetch Join — 캐시 MISS (`GET /schedules/fetch`) | **1회** | 약 50ms |
+| Fetch Join — 캐시 HIT | **0회** | 약 20~30ms |
+
+> 첫 호출은 JVM 워밍업 영향으로 2,000ms 이상 측정되었습니다.
+> 절대값은 측정 시점에 따라 흔들렸으나 각 방식 간 비율은 일정하게 유지되어,
+> 워밍업 이후 안정화된 값을 기준으로 정리했습니다.
 
 ## 트러블슈팅
 
-*(작성 예정)*
+| 문제 | 원인 | 해결 |
+| --- | --- | --- |
+| 목록 조회 1건에 쿼리 1,003회 | 지연 로딩 프록시가 건별로 초기화 | Fetch Join |
+| 쿼리는 99.9% 줄었으나 응답 개선 미미 | Dirty Checking 스냅샷 생성 비용 | 조회 전용 트랜잭션 |
+| 데이터 변경 후 낡은 목록 반환 | 캐시와 DB가 별개 저장소 | `@CacheEvict` |
+| CacheManager 빈 생성 실패 | Spring Boot 4.1 캐시 자동설정 부재 | `RedisCacheManager` 직접 등록 |
+| 캐시 역직렬화 실패 | JSON에 타입 정보가 없음 | JDK 직렬화로 전환 |
+| 카테고리 없는 일정이 조회에서 누락 | `join fetch`는 기본이 inner join | `left join fetch` + null 방어 |
+
+각 항목의 원인 분석과 검증 과정은 **[docs/troubleshooting.md](docs/troubleshooting.md)** 에 정리했습니다.
