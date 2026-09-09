@@ -329,3 +329,35 @@ where schedule_id=?
   setter는 필드를 하나씩 바꿔 중간에 startAt > endAt 인 상태가 생길 수 있고,
   검증 시점에 비교할 다른 필드가 아직 옛 값이라 순서에 따라 결과가 달라짐
   → 변경할 값을 한 번에 받아야 새 값끼리 검증 가능
+
+
+---
+2026-09-09 (수) — Service 단위 테스트 작성
+---
+
+### 한 것
+- JUnit5 + Mockito 의존성 확인 (spring-boot-starter-*-test에 이미 포함되어 있어 추가 불필요)
+- ScheduleService 단위 테스트 7개 작성 (Repository 3개는 @Mock, @InjectMocks로 Service 조립)
+- README에 테스트 섹션 추가, docs/troubleshooting.md에 8번 항목 추가
+
+### 배운 것
+- @Mock/@InjectMocks는 상속이 아니라 조립: Mockito가 Repository 인터페이스의 가짜 구현체를
+  만들고, @InjectMocks가 그걸 ScheduleService 생성자에 끼워 넣어 진짜 객체를 만듦
+- given().willReturn()은 when().thenReturn()과 같은 문법 (BDD 스타일 별칭).
+  "이 입력으로 호출되면 이걸 리턴해라"를 미리 등록해두는 것일 뿐, DB는 전혀 안 건드림
+- verify(mock, never()).method()로 "호출되지 않았어야 한다"까지 검증 가능
+  (반대로 verify(mock).method()는 "1번 호출됐어야 한다")
+- 단위 테스트에서 가짜로 바뀌는 건 Repository뿐, Schedule.builder()·검증 로직·
+  ScheduleService의 분기문은 전부 실제 코드 그대로 실행됨 — 이게 "단위"의 의미
+- id는 @GeneratedValue라 세터가 없어(DB가 INSERT 시점에 채움), 테스트에서는
+  ReflectionTestUtils.setField로 강제 주입해야 함
+
+### 애로사항
+- update() 테스트에서 "categoryId 없으면 카테고리가 유지될 것"으로 가정하고 짰다가 실패
+  → Schedule.update()가 category를 조건 없이 덮어써서, categoryId 없이 수정하면
+    실제로는 카테고리가 null로 지워지는 동작이었음
+  → 수정 API가 PUT이라 리소스 전체 교체가 표준 시맨틱임을 확인, 버그가 아니라
+    의도된 동작으로 판단하고 주석 추가
+
+### 남은 것
+- Controller 계층 테스트(@WebMvcTest)는 아직 없음 — 필요 시 다음 단계로

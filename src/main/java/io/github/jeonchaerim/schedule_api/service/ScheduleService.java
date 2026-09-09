@@ -85,7 +85,7 @@ public class ScheduleService {
                     .orElseThrow(() -> new IllegalArgumentException("카테고리를 찾을 수 없습니다."));
         }
 
-        //
+        // PUT 풀 리플레이스 정책: categoryId 없으면 category가 null로 전달되어 기존 카테고리도 제거됨 (부분 수정 X)
         schedule.update(request.title(), request.content(),
                 request.startAt(), request.endAt(), category);
         // save() 안 부름 ← 여기가 포인트

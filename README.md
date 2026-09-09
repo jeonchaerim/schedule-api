@@ -166,6 +166,24 @@ lsof -i :8080
 kill -9 <PID>
 ```
 
+## 테스트
+
+Service 계층 단위 테스트를 JUnit5 + Mockito로 작성했습니다.
+Repository는 모두 Mock으로 대체해 DB 없이 비즈니스 로직만 검증합니다.
+
+```bash
+./gradlew test
+```
+
+| 대상 | 케이스 | 검증 내용 |
+| --- | --- | --- |
+| `findAll` / `findAllWithFetch` | 정상 | Schedule을 ScheduleResponse로 매핑 |
+| `create` | 정상 | 회원·카테고리 조회 후 저장, id 반환 |
+| `create` | 예외 | 존재하지 않는 회원 id면 `IllegalArgumentException` |
+| `update` | 정상 | categoryId 없으면 카테고리 제거, `save()` 미호출(Dirty Checking) |
+| `update` | 예외 | 존재하지 않는 일정 id면 `IllegalArgumentException` |
+| `delete` | 예외 | 존재하지 않는 일정 id면 `IllegalArgumentException` |
+
 ## API 명세
 
 | Method | URI | 설명 |
@@ -214,5 +232,6 @@ kill -9 <PID>
 | CacheManager 빈 생성 실패 | Spring Boot 4.1 캐시 자동설정 부재 | `RedisCacheManager` 직접 등록 |
 | 캐시 역직렬화 실패 | JSON에 타입 정보가 없음 | JDK 직렬화로 전환 |
 | 카테고리 없는 일정이 조회에서 누락 | `join fetch`는 기본이 inner join | `left join fetch` + null 방어 |
+| categoryId 없이 수정하면 카테고리가 사라짐 | `PUT`은 리소스 전체 교체가 표준 시맨틱 | 주석으로 정책 명시 |
 
 각 항목의 원인 분석과 검증 과정은 **[docs/troubleshooting.md](docs/troubleshooting.md)** 에 정리했습니다.

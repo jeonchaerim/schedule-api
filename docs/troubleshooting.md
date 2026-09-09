@@ -283,3 +283,52 @@ schedule.getCategory() == null ? null : schedule.getCategory().getName()
 
 **스키마(null 허용) · 쿼리(left join) · DTO(null 방어)가 한 세트로 맞아야 한다**는 것을
 확인한 사례입니다.
+
+---
+
+### 8. 일정 수정(PUT) — categoryId 없으면 카테고리가 제거됨
+
+**문제**
+
+`PUT /schedules/{id}` 요청에서 `categoryId`를 생략하면 기존에 설정되어
+있던 카테고리가 사라집니다. `update()` 단위 테스트를 작성하며
+"categoryId가 없으면 카테고리가 유지될 것"이라고 가정하고 검증하다가
+발견했습니다.
+
+**원인**
+
+```java
+Category category = null;
+if (request.categoryId() != null) {
+    category = categoryRepository.findById(request.categoryId())
+            .orElseThrow(() -> new IllegalArgumentException("카테고리를 찾을 수 없습니다."));
+}
+schedule.update(request.title(), request.content(),
+        request.startAt(), request.endAt(), category);
+```
+
+`categoryId`가 없으면 `category` 지역변수가 `null`로 유지된 채
+`Schedule.update()`에 전달됩니다.
+
+```java
+this.category = category;
+```
+
+`Schedule.update()`는 이 값을 조건 없이 그대로 덮어쓰기 때문에,
+기존 카테고리가 `null`로 지워집니다.
+
+**판단**
+
+수정 API가 `PUT /schedules/{id}`로 설계되어 있어, HTTP PUT의 표준 시맨틱
+(요청 표현으로 리소스 전체를 교체)에 부합하는 동작으로 판단했습니다.
+프론트가 수정 폼 전체를 다시 제출하는 구조라면, `categoryId`가 없다는 것은
+사용자가 카테고리를 실제로 제거했다는 의미로 해석하는 것이 맞습니다.
+
+부분 수정(PATCH)이 필요한 API라면 `Optional`/`JsonNullable` 같은 래퍼로
+"필드가 요청에 있었는지"와 "필드를 명시적으로 null로 보냈는지"를 구분해야
+합니다.
+
+**PUT은 필드 생략을 "값 없음"으로 해석해 리소스를 통째로 교체하는 것이
+표준**이라는 것을 테스트 작성 과정에서 확인한 사례입니다. 버그가 아니라
+설계 의도임을 확인하고 `ScheduleService.update()`에 이를 명시하는 주석을
+추가했습니다.
