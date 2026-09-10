@@ -2,13 +2,11 @@ package io.github.jeonchaerim.schedule_api;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.cache.annotation.EnableCaching;
-import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 
-@EnableCaching    // Redis
+// @EnableCaching은 CacheConfig로, @EnableJpaAuditing은 JpaAuditingConfig로 이동
+// (메인 클래스에 직접 붙이면 @WebMvcTest/@DataJpaTest가 이 클래스를 그대로 재사용하면서
+//  컴포넌트 스캔은 걷어내도 이 어노테이션들은 그대로 적용되어, 슬라이스 테스트가 깨짐)
 @SpringBootApplication
-@EnableJpaAuditing	// 이걸 안붙이면 리스너가 등록이 안되서 createdDt가 null로 들어감
-// Auditing기능 자체를 켜는 것
 public class ScheduleApiApplication {
 
 	public static void main(String[] args) {

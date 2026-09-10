@@ -1,6 +1,7 @@
 package io.github.jeonchaerim.schedule_api.config;
 
 import org.springframework.cache.CacheManager;
+import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
@@ -18,6 +19,7 @@ import tools.jackson.databind.DefaultTyping;
 import java.time.Duration;
 
 @Configuration
+@EnableCaching    // Redis — 메인 애플리케이션 클래스가 아닌 여기서 활성화 (슬라이스 테스트 격리)
 public class CacheConfig {
 
     // 캐시매니저를 스프링 빈에 수동 등록

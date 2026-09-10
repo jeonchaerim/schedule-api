@@ -332,3 +332,149 @@ this.category = category;
 표준**이라는 것을 테스트 작성 과정에서 확인한 사례입니다. 버그가 아니라
 설계 의도임을 확인하고 `ScheduleService.update()`에 이를 명시하는 주석을
 추가했습니다.
+
+---
+
+### 9. @WebMvcTest / @DataJpaTest 슬라이스 실패 — 메인 클래스에 붙은 @EnableCaching·@EnableJpaAuditing
+
+**문제**
+
+Repository/Controller 슬라이스 테스트를 추가하자 둘 다 컨텍스트 로딩 단계에서
+실패했습니다. `@WebMvcTest`는 `JPA metamodel must not be empty`,
+`@DataJpaTest`는 `CacheManager` 타입의 빈을 찾지 못하는 `NoSuchBeanDefinitionException`
+이었습니다.
+
+**원인**
+
+`ScheduleApiApplication`에 `@EnableCaching`, `@EnableJpaAuditing`이 직접
+붙어 있었습니다. 슬라이스 테스트는 이 메인 클래스를 부트스트랩 설정으로
+그대로 재사용하는데, 컴포넌트 스캔은 걷어내지만 **메인 클래스에 직접 붙은
+어노테이션은 걷어내지 않습니다.**
+
+```java
+@EnableCaching
+@SpringBootApplication
+@EnableJpaAuditing
+public class ScheduleApiApplication { ... }
+```
+
+그 결과 `@WebMvcTest`(엔티티 없음)에서는 JPA Auditing이 빈 메타모델을
+만나 실패했고, `@DataJpaTest`(캐시 설정 없음)에서는 캐싱 AOP가
+`CacheManager`를 찾지 못해 실패했습니다.
+
+**해결**
+
+두 어노테이션을 메인 클래스에서 떼어 각자의 설정 클래스로 옮겼습니다.
+
+```java
+// CacheConfig.java
+@Configuration
+@EnableCaching
+public class CacheConfig { ... }
+
+// JpaAuditingConfig.java (신규)
+@Configuration
+@EnableJpaAuditing
+public class JpaAuditingConfig { }
+```
+
+일반 `@Configuration` 클래스는 슬라이스 테스트의 `TypeExcludeFilter`에
+걸려 제외되므로, 이제는 슬라이스 테스트에 영향을 주지 않습니다.
+
+**`@SpringBootApplication` 클래스에 기능 활성화 어노테이션을 직접 붙이면
+슬라이스 테스트로 새어 들어간다**는 것을 확인한 사례입니다. 전체
+애플리케이션 기동(컴포넌트 스캔)에는 영향이 없어 동작은 그대로 유지됩니다.
+
+---
+
+### 10. Spring Boot 4.1 — @MockBean이 제거되고 @MockitoBean으로 대체됨
+
+**문제**
+
+`@WebMvcTest`에서 Service를 목킹하려고 `@MockBean`을 쓰려 했으나 해당
+클래스가 클래스패스에 존재하지 않았습니다.
+
+**원인**
+
+Spring Boot 4.1의 `spring-boot-test` 4.1.0 jar에는 `MockBean` 클래스가
+없습니다. Spring Framework의 `@MockitoBean`
+(`org.springframework.test.context.bean.override.mockito.MockitoBean`)으로
+대체되었습니다.
+
+**해결**
+
+```java
+@MockitoBean
+private ScheduleService scheduleService;
+```
+
+동작은 기존 `@MockBean`과 동일하게, 해당 타입의 빈을 Mockito mock으로
+교체해 컨텍스트에 등록합니다.
+
+**최신 Spring Boot 버전을 쓸 때는 자료보다 실제 jar 안의 클래스를
+직접 확인하는 것이 더 정확하다**는 것을 확인한 사례입니다.
+
+---
+
+### 11. docker compose 프로젝트 이름 — 한글 폴더명이 이미지 태그를 깨뜸
+
+**문제**
+
+`docker compose up --build`는 성공(exit code 0)했는데, `app` 컨테이너가
+뜨지 않고 `Error response from daemon: no such image: 2026_08___app:
+invalid reference format`가 발생했습니다.
+
+**원인**
+
+프로젝트 폴더명이 `2026_08_일정_토이프로젝트`로 한글을 포함하고 있어,
+docker compose가 폴더명으로부터 자동 생성하는 프로젝트 이름이
+`2026_08__`처럼 깨졌습니다. 이 깨진 이름이 그대로 이미지 태그
+(`<프로젝트명>_app`)에 들어가 유효하지 않은 레퍼런스가 되었습니다.
+
+**해결**
+
+`docker-compose.yml` 최상단에 프로젝트 이름을 명시해 폴더명에 의존하지
+않도록 했습니다.
+
+```yaml
+name: schedule-api
+
+services:
+  ...
+```
+
+**docker compose는 기본적으로 폴더명을 프로젝트 이름(=이미지 태그의 일부)으로
+사용하므로, 폴더명에 비ASCII 문자가 들어가면 `name`을 명시해야 안전하다**는
+것을 확인한 사례입니다.
+
+---
+
+### 12. Apple Silicon(arm64)에서 eclipse-temurin:17-jre-alpine 빌드 실패
+
+**문제**
+
+11번을 해결한 뒤 다시 빌드하니 이번에는 `no match for platform in
+manifest ...: not found`로 실행 스테이지 이미지를 받아오지 못했습니다.
+
+**원인**
+
+빌드 호스트가 Apple Silicon(arm64)인데, `eclipse-temurin:17-jre-alpine`이
+가리키는 특정 패치 버전에는 arm64용 매니페스트가 빠져 있었습니다.
+JDK 빌드 스테이지(`17-jdk-jammy`)는 문제가 없었고, 실행 스테이지에서만
+발생했습니다.
+
+**해결**
+
+실행 스테이지 베이스 이미지를 멀티 아키텍처 지원이 더 안정적인
+`eclipse-temurin:17-jre-jammy`로 교체했습니다. jammy 계열에는 `curl`이
+기본 포함되어 있지 않아, 헬스체크용으로 별도 설치했습니다.
+
+```dockerfile
+FROM eclipse-temurin:17-jre-jammy
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+```
+
+**alpine 계열 공식 이미지는 patch 버전에 따라 특정 아키텍처의 매니페스트가
+누락될 수 있어, 멀티 아키텍처 환경(Apple Silicon 등)을 고려한다면 jammy
+계열이 더 안전하다**는 것을 확인한 사례입니다.

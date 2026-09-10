@@ -25,10 +25,11 @@ JPA가 실제로 어떤 쿼리를 생성하는지 확인하기 위해 만든 프
 | --- | --- |
 | Language | Java 17 |
 | Framework | Spring Boot 4.1, Spring Data JPA |
-| Database | H2 (in-memory) |
+| Database | H2 in-memory (local 프로필) / PostgreSQL (docker 프로필) |
 | Cache | Redis |
 | Docs | springdoc-openapi (Swagger UI) |
 | Build | Gradle 9.5 |
+| Container | Docker, Docker Compose |
 
 ## 프로젝트 구조
 
@@ -166,14 +167,49 @@ lsof -i :8080
 kill -9 <PID>
 ```
 
+## Docker로 실행하기
+
+PostgreSQL + Redis + 애플리케이션을 한 번에 띄웁니다 (`docker` 프로필로 기동,
+로컬 Redis/Gradle 설치가 필요 없습니다).
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+```
+
+| | URL |
+| --- | --- |
+| Swagger UI | http://localhost:8080/swagger-ui/index.html |
+| Health Check | http://localhost:8080/actuator/health |
+
+**상태·헬스체크 확인**
+
+```bash
+docker compose ps                              # app/postgres/redis 3개 모두 healthy인지 확인
+curl http://localhost:8080/actuator/health     # {"status":"UP"}
+```
+
+**종료**
+
+```bash
+docker compose down      # 컨테이너만 제거 (postgres 볼륨은 유지되어 데이터 보존)
+docker compose down -v   # 볼륨까지 제거하고 완전히 초기화
+```
+
+> `local`(H2) ↔ `docker`(PostgreSQL) 전환은 `SPRING_PROFILES_ACTIVE`로
+> 이루어지며, `docker-compose.yml`의 `app` 서비스가 이를 `docker`로 지정합니다.
+> `ddl-auto: create`라서 컨테이너를 재기동해도 매번 동일한 더미 데이터셋
+> (회원 1,000명 / 일정 2,000건)으로 새로 생성됩니다.
+
 ## 테스트
 
-Service 계층 단위 테스트를 JUnit5 + Mockito로 작성했습니다.
-Repository는 모두 Mock으로 대체해 DB 없이 비즈니스 로직만 검증합니다.
+Service·Repository·Controller 세 계층 모두 테스트를 작성했습니다.
 
 ```bash
 ./gradlew test
 ```
+
+**Service** — JUnit5 + Mockito, Repository는 전부 Mock 처리
 
 | 대상 | 케이스 | 검증 내용 |
 | --- | --- | --- |
@@ -183,6 +219,24 @@ Repository는 모두 Mock으로 대체해 DB 없이 비즈니스 로직만 검�
 | `update` | 정상 | categoryId 없으면 카테고리 제거, `save()` 미호출(Dirty Checking) |
 | `update` | 예외 | 존재하지 않는 일정 id면 `IllegalArgumentException` |
 | `delete` | 예외 | 존재하지 않는 일정 id면 `IllegalArgumentException` |
+
+**Repository** — `@DataJpaTest` (내장 H2)
+
+| 대상 | 검증 내용 |
+| --- | --- |
+| `save` / `findById` / `findAll` / `delete` | 기본 CRUD |
+| `update()` + flush | 엔티티 변경이 실제 DB에 반영되는지 (1차 캐시 clear 후 재조회) |
+| `findAllWithMemberAndCategory` | fetch join으로 연관관계가 채워지는지, 카테고리 없는 일정도 포함되는지 |
+
+**Controller** — `@WebMvcTest` + MockMvc, Service는 `@MockitoBean` 처리
+
+| 엔드포인트 | 정상 케이스 | 예외/대안 케이스 |
+| --- | --- | --- |
+| `GET /schedules` | 목록 반환 | 빈 목록 반환 |
+| `GET /schedules/fetch` | 목록 반환 | 빈 목록 반환 |
+| `POST /schedules` | id 반환 (200) | 기간 검증 실패 시 400 + 에러 메시지 |
+| `PUT /schedules/{id}` | 200 | 존재하지 않는 id면 400 + 에러 메시지 |
+| `DELETE /schedules/{id}` | 200 | 존재하지 않는 id면 400 + 에러 메시지 |
 
 ## API 명세
 
@@ -233,5 +287,9 @@ Repository는 모두 Mock으로 대체해 DB 없이 비즈니스 로직만 검�
 | 캐시 역직렬화 실패 | JSON에 타입 정보가 없음 | JDK 직렬화로 전환 |
 | 카테고리 없는 일정이 조회에서 누락 | `join fetch`는 기본이 inner join | `left join fetch` + null 방어 |
 | categoryId 없이 수정하면 카테고리가 사라짐 | `PUT`은 리소스 전체 교체가 표준 시맨틱 | 주석으로 정책 명시 |
+| 슬라이스 테스트 컨텍스트 로딩 실패 | 메인 클래스에 직접 붙은 `@EnableCaching`·`@EnableJpaAuditing` | 각자의 `@Configuration` 클래스로 이동 |
+| `@MockBean` 클래스 없음 (컴파일 불가) | Spring Boot 4.1에서 제거됨 | `@MockitoBean`으로 대체 |
+| docker compose가 `app` 이미지를 못 찾음 | 한글 폴더명이 자동 생성 프로젝트 이름을 깨뜸 | `docker-compose.yml`에 `name` 명시 |
+| arm64에서 실행 스테이지 이미지 pull 실패 | `eclipse-temurin:17-jre-alpine`의 arm64 매니페스트 누락 | `eclipse-temurin:17-jre-jammy`로 교체 |
 
 각 항목의 원인 분석과 검증 과정은 **[docs/troubleshooting.md](docs/troubleshooting.md)** 에 정리했습니다.

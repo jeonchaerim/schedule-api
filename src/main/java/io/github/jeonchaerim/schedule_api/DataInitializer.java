@@ -22,6 +22,10 @@ public class DataInitializer implements CommandLineRunner {
 
 	@Override
 	public void run(String... args) {
+		if (memberRepository.count() > 0) {
+			return;   // 이미 데이터가 있으면 재시딩하지 않음 (Postgres는 재기동해도 데이터가 유지되므로)
+		}
+
 		Category work = categoryRepository.save(
 				Category.builder().name("업무").color("#FF5733").build());
 		Category study = categoryRepository.save(

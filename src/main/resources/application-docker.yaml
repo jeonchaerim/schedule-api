@@ -1,0 +1,13 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:postgres}:${DB_PORT:5432}/${DB_NAME:schedule}
+    driver-class-name: org.postgresql.Driver
+    username: ${DB_USERNAME:schedule}
+    password: ${DB_PASSWORD:schedule}
+  jpa:
+    hibernate:
+      ddl-auto: update   # 볼륨에 유지되는 Postgres 데이터를 재기동 시에도 보존 (create는 매번 DROP/CREATE)
+  data:
+    redis:
+      host: ${REDIS_HOST:redis}
+      port: ${REDIS_PORT:6379}

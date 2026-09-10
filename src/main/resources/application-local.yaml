@@ -1,0 +1,20 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1 # 커넥션 유지
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create   # 인메모리 DB라 기동마다 초기화됨 — 매번 스키마를 새로 생성
+  h2:
+    console:
+      enabled: true
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+logging:
+  level:
+    org.hibernate.orm.jdbc.bind: trace # ? 에 들어간 실제 값 — local 개발용, docker 프로필에는 미적용

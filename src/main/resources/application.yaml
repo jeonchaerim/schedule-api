@@ -1,27 +1,14 @@
 spring:
   application:
     name: schedule-api
-  datasource:
-    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1 # 커넥션 유지
-    driver-class-name: org.h2.Driver
-    username: sa
-    password:
-  h2:
-    console:
-      enabled: true
+  profiles:
+    active: local   # docker-compose에서 SPRING_PROFILES_ACTIVE=docker로 덮어씀
   jpa:
-    hibernate:
-      ddl-auto: create
     properties:
       hibernate:
         format_sql: true
     open-in-view: true   # N+1 재현 비교를 위해 의도적으로 유지
-  data:
-    redis:
-      host: localhost
-      port: 6379
 
 logging:
   level:
-    org.hibernate.SQL: debug # SQL 문 자체
-    org.hibernate.orm.jdbc.bind: trace # ? 에 들어간 실제 값
+    org.hibernate.SQL: debug # SQL 문 자체 (바인딩 값은 없음 — profile별 로깅은 각 파일 참고)

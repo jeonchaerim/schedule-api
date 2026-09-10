@@ -359,5 +359,30 @@ where schedule_id=?
   → 수정 API가 PUT이라 리소스 전체 교체가 표준 시맨틱임을 확인, 버그가 아니라
     의도된 동작으로 판단하고 주석 추가
 
+### 이어서 한 것 — Repository/Controller 테스트, Docker
+- ScheduleRepository 테스트 6개 작성 (@DataJpaTest, 내장 H2) — CRUD,
+  update() flush 후 반영 확인, findAllWithMemberAndCategory의 fetch join·
+  null 카테고리 케이스
+- ScheduleController 테스트 10개 작성 (@WebMvcTest + MockMvc, Service는
+  @MockitoBean) — 5개 엔드포인트 × 정상/예외(대안) 각 1개
+- Dockerfile(멀티스테이지) + docker-compose.yml(app/postgres/redis) +
+  .env.example 작성, docker compose up으로 실제 기동·헬스체크까지 확인
+
+### 배운 것 (2)
+- Spring Boot 4.1에서 @MockBean이 제거됨 — @MockitoBean으로 대체해야 함
+  (자료보다 실제 jar 안의 클래스를 까보는 게 더 정확함)
+- @SpringBootApplication 클래스에 직접 붙인 @EnableCaching/@EnableJpaAuditing은
+  슬라이스 테스트(@WebMvcTest/@DataJpaTest)에도 그대로 적용됨
+  → 컴포넌트 스캔은 걷어내도 메인 클래스 자체의 어노테이션은 안 걷어내서
+  → 각자의 @Configuration 클래스로 옮겨서 슬라이스 테스트와 분리
+- ddl-auto: create + 영속 볼륨(Postgres)이어도 충돌 없음 — 매 기동 시
+  스키마·데이터를 통째로 새로 만들어서, 재기동해도 DataInitializer의
+  중복 email로 인한 unique 제약 위반이 발생하지 않음 (실제 재시작 테스트로 확인)
+- docker compose는 폴더명으로 프로젝트 이름(=이미지 태그 일부)을 자동 생성함
+  → 한글 폴더명이면 깨진 이름이 만들어져 이미지를 못 찾음 → compose.yml에
+    name을 명시해서 폴더명 의존성을 없앰
+- eclipse-temurin:17-jre-alpine은 patch 버전에 따라 arm64(Apple Silicon)
+  매니페스트가 없을 수 있음 → jre-jammy로 교체해 해결
+
 ### 남은 것
-- Controller 계층 테스트(@WebMvcTest)는 아직 없음 — 필요 시 다음 단계로
+- 없음 (Service/Repository/Controller 3계층 테스트 + Docker 전체 스택 완료)
