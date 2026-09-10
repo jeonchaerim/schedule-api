@@ -1,5 +1,7 @@
 # schedule-api
 
+[![CI](https://github.com/jeonchaerim/schedule-api/actions/workflows/ci.yml/badge.svg)](https://github.com/jeonchaerim/schedule-api/actions/workflows/ci.yml)
+
 > Spring Data JPA와 Redis를 활용한 일정 관리 REST API
 > JPA 연관관계에서 발생하는 N+1 문제를 재현하고 Fetch Join으로 해결했으며,
 > Redis 캐싱과 캐시 무효화를 적용해 각 단계의 쿼리 수·응답 시간을 측정했습니다.
@@ -198,8 +200,9 @@ docker compose down -v   # 볼륨까지 제거하고 완전히 초기화
 
 > `local`(H2) ↔ `docker`(PostgreSQL) 전환은 `SPRING_PROFILES_ACTIVE`로
 > 이루어지며, `docker-compose.yml`의 `app` 서비스가 이를 `docker`로 지정합니다.
-> `ddl-auto: create`라서 컨테이너를 재기동해도 매번 동일한 더미 데이터셋
-> (회원 1,000명 / 일정 2,000건)으로 새로 생성됩니다.
+> `ddl-auto`는 local은 `create`(매 기동 시 초기화), docker는 `update`(데이터 유지)로
+> 분리되어 있어, 컨테이너를 재기동해도 등록한 데이터가 유지됩니다. 초기 더미
+> 데이터(회원 1,000명 / 일정 2,000건)는 최초 기동 시 한 번만 생성됩니다.
 
 ## 테스트
 
@@ -232,11 +235,23 @@ Service·Repository·Controller 세 계층 모두 테스트를 작성했습니�
 
 | 엔드포인트 | 정상 케이스 | 예외/대안 케이스 |
 | --- | --- | --- |
-| `GET /schedules` | 목록 반환 | 빈 목록 반환 |
-| `GET /schedules/fetch` | 목록 반환 | 빈 목록 반환 |
+| `GET /schedules` | 목록 반환 | 빈 목록 반환 / Service 예외 시 400 |
+| `GET /schedules/fetch` | 목록 반환 | 빈 목록 반환 / Service 예외 시 400 |
 | `POST /schedules` | id 반환 (200) | 기간 검증 실패 시 400 + 에러 메시지 |
 | `PUT /schedules/{id}` | 200 | 존재하지 않는 id면 400 + 에러 메시지 |
 | `DELETE /schedules/{id}` | 200 | 존재하지 않는 id면 400 + 에러 메시지 |
+
+## CI
+
+`main` 브랜치로 push하거나 PR을 열면 [GitHub Actions](.github/workflows/ci.yml)가
+자동으로 JDK 17 환경에서 `./gradlew build`(전체 테스트 포함)를 실행합니다.
+
+- Gradle 의존성은 `actions/setup-java`의 내장 캐시로 재사용되어 빌드 시간을 줄입니다.
+- 테스트가 하나라도 실패하면 워크플로우 전체가 실패로 표시됩니다.
+- 성공/실패 여부와 무관하게 테스트 리포트가 Actions 실행 결과의 Artifacts로 업로드됩니다.
+
+상단의 CI 배지가 `passing`이면 `main` 브랜치의 최신 커밋이 빌드·테스트를
+통과했다는 뜻입니다.
 
 ## API 명세
 
