@@ -48,6 +48,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4   # amd64 러너에서 arm64용 이미지도 함께 빌드하기 위한 에뮬레이션
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -68,6 +71,7 @@ jobs:
         with:
           context: .
           push: true
+          platforms: linux/amd64,linux/arm64   # 인텔/AMD 서버와 Apple Silicon 둘 다에서 pull 가능하게
           cache-from: type=gha
           cache-to: type=gha,mode=max   # GitHub Actions 캐시로 레이어 재사용 (매번 처음부터 빌드하지 않도록)
           tags: |

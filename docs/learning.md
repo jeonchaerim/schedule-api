@@ -430,3 +430,54 @@ where schedule_id=?
 
 ### 애로사항
 - 없음 (원인 추적형 문제보다는 코드리뷰로 미리 찾아서 수정한 케이스들)
+
+
+---
+2026-09-11 (금) — CD(GHCR 배포) 추가
+---
+
+### 한 것
+- ci.yml에 deploy job 추가 — build job 성공 후(push 이벤트에서만) Docker
+  이미지를 빌드해 ghcr.io(GitHub Container Registry)에 push
+  - latest, 커밋 SHA 두 태그로 업로드
+  - docker/login-action, docker/build-push-action 사용, 인증은
+    GITHUB_TOKEN(매 실행마다 자동 발급)으로 처리
+- `/code-review`로 방금 작성한 deploy job 자체를 리뷰 → 3개 발견, 전부 수정
+  1. `if: github.event_name == 'push'`가 `needs: build`의 기본 성공 게이트를
+     대체해버려서, 테스트가 실패해도 deploy가 실행될 수 있었음
+     → `if: success() && github.event_name == 'push'`로 명시
+  2. Docker 레이어 캐시가 없어 매번 전체 재빌드 → `cache-from`/`cache-to:
+     type=gha` 추가
+  3. 이미지 태그가 `github.repository`를 그대로 써서 대문자 계정이면 깨질 수
+     있었음 → 소문자 변환 step 추가
+- 실제로 push해서 `Packages`에 이미지가 정상 태그로 올라간 것까지 확인
+- 로컬에서 `docker pull` + `docker run`으로 직접 실행 시도 →
+  `no matching manifest for linux/arm64/v8` 발견
+  → 원인: GitHub Actions 러너(amd64)에서만 빌드해서 이미지에 arm64용
+    알맹이가 없었음. 8/20~21에 겪은 `eclipse-temurin:17-jre-alpine` arm64
+    문제와 같은 카테고리(멀티 아키텍처)의 버그
+  → `docker/setup-qemu-action` 추가 + `build-push-action`에
+    `platforms: linux/amd64,linux/arm64` 명시해서 해결
+
+### 배운 것
+- workflow > job > step 계층. job은 기본 병렬 실행, `needs`는 "순서(대기)"만
+  보장하고 "성공 여부 확인"은 별개 — 커스텀 `if`를 쓰면 그 성공 게이트가
+  조용히 사라질 수 있음 (빌드가 "끝난 것"과 "성공한 것"은 다른 개념)
+- `uses: 조직/저장소@버전`은 build.gradle의 `그룹:라이브러리:버전`과 같은
+  구조 — 재사용 가능한 코드를 정확한 버전으로 가져다 쓰는 것
+- `with:`는 그 action(함수)에 넘기는 인자(파라미터)
+- `push: true`는 "빌드만 하지 말고 레지스트리에 올려라"는 옵션. `push: false`로
+  "빌드만" 하는 것과 Gradle의 `build`(자바 테스트)는 서로 다른 것을 검증함
+  — 우리 Dockerfile은 `-x test`로 이미지 빌드 시 테스트를 스킵하기 때문에,
+  `deploy`가 `build`의 성공 여부를 안 보면 테스트 깨진 이미지도 그냥
+  빌드·푸시될 수 있었던 것 (그래서 success() 누락이 실제로 위험했음)
+- ghcr.io(GitHub Container Registry) = GitHub이 운영하는 Docker 이미지
+  저장소. 코드는 GitHub, 빌드 결과물(이미지)은 ghcr.io
+- GitHub Actions 러너는 기본적으로 자기 아키텍처(amd64)로만 빌드함 —
+  여러 아키텍처용 이미지를 만들려면 QEMU 에뮬레이션 + `platforms` 옵션이
+  명시적으로 필요함
+
+### 애로사항
+- 로컬(Apple Silicon)에서 방금 올린 이미지를 pull해서 돌려보니
+  arm64 매니페스트가 없어서 실행 자체가 안 됨 → 원인 파악 후 멀티
+  아키텍처 빌드로 수정 (위 "한 것" 참고)
