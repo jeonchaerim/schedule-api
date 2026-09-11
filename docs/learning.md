@@ -375,9 +375,10 @@ where schedule_id=?
   슬라이스 테스트(@WebMvcTest/@DataJpaTest)에도 그대로 적용됨
   → 컴포넌트 스캔은 걷어내도 메인 클래스 자체의 어노테이션은 안 걷어내서
   → 각자의 @Configuration 클래스로 옮겨서 슬라이스 테스트와 분리
-- ddl-auto: create + 영속 볼륨(Postgres)이어도 충돌 없음 — 매 기동 시
-  스키마·데이터를 통째로 새로 만들어서, 재기동해도 DataInitializer의
-  중복 email로 인한 unique 제약 위반이 발생하지 않음 (실제 재시작 테스트로 확인)
+- ddl-auto: create + 영속 볼륨(Postgres)이면 재기동할 때마다 스키마·데이터를
+  통째로 새로 만들어서 DataInitializer 중복 email 충돌은 안 나지만, 대신
+  "볼륨으로 데이터 유지"라는 원래 목적 자체가 깨짐 — 다음날 코드리뷰에서
+  발견 (9/10 기록 참고)
 - docker compose는 폴더명으로 프로젝트 이름(=이미지 태그 일부)을 자동 생성함
   → 한글 폴더명이면 깨진 이름이 만들어져 이미지를 못 찾음 → compose.yml에
     name을 명시해서 폴더명 의존성을 없앰
@@ -386,3 +387,46 @@ where schedule_id=?
 
 ### 남은 것
 - 없음 (Service/Repository/Controller 3계층 테스트 + Docker 전체 스택 완료)
+
+
+---
+2026-09-10 (목) — 코드리뷰 반영 + GitHub Actions CI
+---
+
+### 한 것
+- `/code-review`로 어제 변경분(테스트+Docker) diff 리뷰 → 4개 발견, 3개 수정
+  1. Postgres 볼륨 마운트해도 ddl-auto: create 때문에 재기동마다 데이터 사라지던 것
+     → local은 create, docker는 update로 분리 + DataInitializer에 재시딩 가드 추가
+  2. docker 프로필에서도 SQL 바인딩 값(이메일 등)이 TRACE 로그로 찍히던 것
+     → local 전용으로만 로깅 레벨 분리
+  3. GET /schedules, /schedules/fetch에 예외 응답 테스트가 없던 것
+     → 2개 추가 (Controller 테스트 10 → 12, 전체 26개)
+  4. (미수정) Controller 테스트 4곳에 JSON 요청 본문 중복 — 리포트만 하고 안 고침
+- 실제 docker-compose 재빌드 → 일정 하나 API로 등록 → 컨테이너 재시작 →
+  데이터 그대로 남는지, 로그에 이메일 안 찍히는지 직접 검증
+- GitHub Actions CI 구성 (.github/workflows/ci.yml)
+  - main push/PR 시 JDK 17 + Gradle 빌드·테스트 자동 실행
+  - actions/checkout@v7, setup-java@v6, upload-artifact@v7 — GitHub API로
+    실제 최신 stable 버전 직접 확인해서 사용
+  - setup-java의 cache: gradle로 의존성 캐싱, 테스트 리포트는 항상 아티팩트 업로드
+- README에 CI 배지 추가, push해서 Actions 탭에서 실제 그린(성공) 확인함 (CI #1)
+
+### 배운 것
+- 워크플로우 > job > step 계층 구조. job은 "가상 컴퓨터 1대한테 던지는 작업
+  뭉치"이고, 기본적으로 같은 워크플로우 안 job들은 병렬 실행됨 — 순서를
+  강제하려면 `needs: build` 같은 걸 명시해야 함
+- `uses:` = 남이 만든 action(함수) 사용, `with:` = 그 함수에 넘기는 인자
+  (파라미터). distribution/java-version/cache는 각각 "어느 회사 JDK인지 /
+  몇 버전인지 / 어떤 빌드도구 캐시를 쓸지"
+- CI(빌드+테스트 자동화)와 CD(배포 자동화)는 다른 개념이지만, 같은 워크플로우
+  파일 안에 job만 추가하면 됨(`deploy: needs: build`) — 파일 이름이 ci.yml
+  이어도 job 추가에 제약 없음
+- 이 "job 순서 의존성(needs)" 개념이 Gradle 자체의 task graph
+  (`build`가 `test`에, `test`가 `compileTestJava`에 의존하는 것)와 똑같은
+  구조라는 걸 뒤늦게 연결함
+- CI 러너는 매번 깨끗한 새 컴퓨터라서, 로컬에 떠 있는 Redis/Postgres에
+  의존하면 안 됨 → 실제로 로컬 docker-compose를 잠깐 내려서(포트 막힌 상태)
+  `./gradlew build`가 통과하는지 직접 검증하고 나서야 CI 설정에 확신을 가짐
+
+### 애로사항
+- 없음 (원인 추적형 문제보다는 코드리뷰로 미리 찾아서 수정한 케이스들)
