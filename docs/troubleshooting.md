@@ -478,3 +478,153 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 **alpine 계열 공식 이미지는 patch 버전에 따라 특정 아키텍처의 매니페스트가
 누락될 수 있어, 멀티 아키텍처 환경(Apple Silicon 등)을 고려한다면 jammy
 계열이 더 안전하다**는 것을 확인한 사례입니다.
+
+---
+
+### 13. CD(deploy job) 코드리뷰 — needs의 성공 게이트가 커스텀 if로 사라짐
+
+**문제**
+
+`deploy` job을 추가한 뒤 `/code-review`로 자체 점검했더니, `needs: build`로
+연결되어 있음에도 build가 실패했을 때 deploy가 실행되지 않는다는 보장이
+없었습니다.
+
+**원인**
+
+```yaml
+deploy:
+  needs: build
+  if: github.event_name == 'push'
+```
+
+GitHub Actions는 `if`를 따로 적지 않으면 "needs job이 성공했을 때만
+실행"을 기본값으로 깔아줍니다. 하지만 커스텀 `if`를 직접 적으면 그
+기본값이 완전히 대체되어, `success()`를 명시하지 않는 한 "성공 여부"는
+더 이상 조건에 포함되지 않습니다. 즉 `github.event_name == 'push'`만
+있으면, build가 실패해도 push 이벤트라는 조건만 맞으면 deploy가 그대로
+실행될 수 있는 상태였습니다.
+
+게다가 `Dockerfile`은 이미지 빌드 시 `-x test`로 테스트를 스킵하기 때문에
+(Gradle 테스트는 이미 `build` job에서 검증했다는 전제), deploy가 이 게이트
+없이 실행되면 **테스트가 깨진 코드도 이미지로 그대로 빌드·푸시**될 수
+있었습니다.
+
+**해결**
+
+```yaml
+if: success() && github.event_name == 'push'
+```
+
+`success()`를 명시적으로 추가해 원래의 안전장치를 되살렸습니다.
+
+**`needs`는 실행 순서(대기)만 보장하고, 성공 여부 확인은 별도로 챙겨야
+한다**는 것을 코드리뷰로 미리 잡은 사례입니다. "끝났다"와 "성공했다"는
+다른 개념입니다.
+
+---
+
+### 14. CD — Docker 레이어 캐시 없이 매번 전체 재빌드
+
+**문제**
+
+`deploy` job이 실행될 때마다 Gradle 의존성 다운로드부터 Docker 이미지
+빌드까지 매번 처음부터 다시 하고 있었습니다.
+
+**원인**
+
+GitHub Actions 러너는 매번 완전히 새로운 가상머신이라, 로컬 컴퓨터와
+달리 이전 실행의 Docker 레이어 캐시가 전혀 남아있지 않습니다.
+`docker/build-push-action`에 캐시 설정이 없어서, 문서나 주석만 고친
+커밋이라도 이미지 빌드가 매번 몇 분씩 걸렸습니다.
+
+**해결**
+
+```yaml
+- uses: docker/build-push-action@v7
+  with:
+    cache-from: type=gha
+    cache-to: type=gha,mode=max
+```
+
+GitHub Actions가 제공하는 캐시 저장소(`type=gha`)를 레이어 캐시로
+사용하도록 지정했습니다.
+
+**CI 러너는 매번 깨끗한 컴퓨터이므로, 로컬에서 당연했던 캐시 재사용도
+명시적으로 설정해줘야 한다**는 것을 확인한 사례입니다.
+
+---
+
+### 15. CD — 이미지 태그의 대소문자 문제
+
+**문제**
+
+이미지 태그를 `github.repository`(예: `jeonchaerim/schedule-api`) 값을
+그대로 써서 만들고 있었는데, 이 값에 대문자가 들어가면 push가 실패할
+수 있는 상태였습니다.
+
+**원인**
+
+Docker 레지스트리는 이미지 이름이 반드시 소문자여야 합니다. 하지만
+`github.repository`는 GitHub 계정/조직명을 가입 시 설정한 대소문자
+그대로 보존해서 반환합니다(GitHub 아이디는 대소문자를 구분하지 않지만
+표기는 보존함). 지금 계정(`jeonchaerim`)은 이미 소문자라 우연히 문제가
+없었지만, 대문자가 포함된 계정으로 이전되거나 이 워크플로우를 다른
+저장소에 그대로 복사하면 `invalid reference format` 에러로 push
+단계에서 실패하게 됩니다.
+
+**해결**
+
+```yaml
+- name: Set lowercase image name
+  id: image
+  run: echo "name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+```
+
+강제로 소문자 변환한 값을 별도 step 출력으로 만들어, 이후 태그 지정에
+그 값(`steps.image.outputs.name`)을 사용하도록 바꿨습니다.
+
+**지금 당장 문제가 없어 보여도, 외부 값(계정명 등)에 의존하는 문자열은
+값의 범위(대소문자 포함 여부)까지 따져봐야 한다**는 것을 확인한 사례입니다.
+
+---
+
+### 16. GHCR에 올라간 이미지 자체가 arm64 매니페스트 없음
+
+**문제**
+
+CD로 ghcr.io에 올라간 이미지를 로컬(Apple Silicon 맥북)에서
+`docker pull` + `docker run`으로 직접 실행해보니
+`no matching manifest for linux/arm64/v8 in the manifest list entries`
+에러가 발생했습니다.
+
+**원인**
+
+GitHub Actions의 `ubuntu-latest` 러너는 amd64(인텔/AMD 계열) 아키텍처
+컴퓨터입니다. `docker/build-push-action`을 별다른 설정 없이 쓰면
+**러너 자신의 아키텍처로만** 이미지를 빌드하기 때문에, ghcr.io에 올라간
+이미지에는 amd64용 레이어만 있고 arm64용 레이어가 없었습니다. 12번에서
+겪은 `eclipse-temurin:17-jre-alpine` 문제(남이 만든 이미지에 arm64가
+없음)와 같은 카테고리지만, 이번엔 **우리가 직접 만든 이미지**에서
+발생했다는 점이 다릅니다.
+
+**해결**
+
+```yaml
+- name: Set up QEMU
+  uses: docker/setup-qemu-action@v4
+
+- name: Set up Docker Buildx
+  uses: docker/setup-buildx-action@v4
+
+- uses: docker/build-push-action@v7
+  with:
+    platforms: linux/amd64,linux/arm64
+```
+
+QEMU 에뮬레이션을 등록해 amd64 러너에서도 arm64용 레이어를 함께 빌드하고,
+`platforms`로 두 아키텍처를 모두 명시했습니다. 수정 후 로컬에서 다시
+`docker pull`했을 때 `arm64/linux`로 정상 pull되는 것을 확인했습니다.
+
+**CI 러너의 아키텍처와 최종 사용자의 아키텍처는 다를 수 있으므로, 여러
+환경에 배포할 이미지는 처음부터 멀티 아키텍처로 빌드해야 한다**는 것을
+실제 로컬 검증으로 확인한 사례입니다.

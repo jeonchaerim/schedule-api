@@ -20,6 +20,8 @@ JPA가 실제로 어떤 쿼리를 생성하는지 확인하기 위해 만든 프
 - 지연 로딩 / Fetch Join 조회를 별도 엔드포인트로 분리해 성능 비교
 - Redis 캐시 적용 및 데이터 변경 시 캐시 무효화
 - Swagger 기반 API 문서 자동화
+- GitHub Actions로 테스트 자동 실행(CI) + 통과 시 멀티 아키텍처 Docker
+  이미지를 GHCR에 자동 배포(CD)
 
 ## 기술 스택
 
@@ -32,6 +34,7 @@ JPA가 실제로 어떤 쿼리를 생성하는지 확인하기 위해 만든 프
 | Docs | springdoc-openapi (Swagger UI) |
 | Build | Gradle 9.5 |
 | Container | Docker, Docker Compose |
+| CI/CD | GitHub Actions, GitHub Container Registry (GHCR) |
 
 ## 프로젝트 구조
 
@@ -241,17 +244,48 @@ Service·Repository·Controller 세 계층 모두 테스트를 작성했습니�
 | `PUT /schedules/{id}` | 200 | 존재하지 않는 id면 400 + 에러 메시지 |
 | `DELETE /schedules/{id}` | 200 | 존재하지 않는 id면 400 + 에러 메시지 |
 
-## CI
+## CI/CD
 
-`main` 브랜치로 push하거나 PR을 열면 [GitHub Actions](.github/workflows/ci.yml)가
-자동으로 JDK 17 환경에서 `./gradlew build`(전체 테스트 포함)를 실행합니다.
+[GitHub Actions](.github/workflows/ci.yml)가 `build`(CI) → `deploy`(CD)
+두 job을 순서대로 실행합니다.
 
-- Gradle 의존성은 `actions/setup-java`의 내장 캐시로 재사용되어 빌드 시간을 줄입니다.
-- 테스트가 하나라도 실패하면 워크플로우 전체가 실패로 표시됩니다.
-- 성공/실패 여부와 무관하게 테스트 리포트가 Actions 실행 결과의 Artifacts로 업로드됩니다.
+**CI — `build` job** (push/PR 공통)
 
-상단의 CI 배지가 `passing`이면 `main` 브랜치의 최신 커밋이 빌드·테스트를
-통과했다는 뜻입니다.
+- JDK 17 환경에서 `./gradlew build`(전체 테스트 포함) 실행
+- Gradle 의존성은 `actions/setup-java`의 내장 캐시로 재사용
+- 테스트가 하나라도 실패하면 워크플로우 전체가 실패로 표시됨
+- 성공/실패 여부와 무관하게 테스트 리포트가 Artifacts로 업로드됨
+
+**CD — `deploy` job** (`main`에 실제로 push됐을 때만, PR에서는 실행 안 됨)
+
+- `build` job이 **성공했을 때만** 실행 (`needs: build` + `if: success()`)
+- Docker 이미지를 amd64/arm64 멀티 아키텍처로 빌드해 GitHub Container
+  Registry(`ghcr.io`)에 `latest`, 커밋 SHA 두 태그로 push
+- GitHub Actions 캐시(`type=gha`)로 레이어를 재사용해 매번 전체 재빌드하지
+  않음
+
+**배포된 이미지 직접 실행해보기**
+
+```bash
+docker pull ghcr.io/jeonchaerim/schedule-api:latest
+docker run -d --name schedule-api-test -p 8080:8080 ghcr.io/jeonchaerim/schedule-api:latest
+curl http://localhost:8080/actuator/health
+```
+
+> **`docker compose`(위 섹션)를 이미 띄워둔 상태라면 8080이 이미 점유되어
+> `port is already allocated` 에러가 납니다.** `docker compose down`으로
+> 내리거나, 이 명령어의 `-p 8080:8080`을 `-p 8081:8080`처럼 호스트 쪽
+> 포트만 바꿔서 실행하세요. 끝난 뒤 정리: `docker rm -f schedule-api-test`
+
+> Redis/Postgres 없이 단독으로 실행하면 `/actuator/health`는 `DOWN`으로
+> 뜨는 게 정상입니다 (Redis 연결 실패). API 자체(`/schedules` 등)는
+> H2(local 프로필 기본값)로 정상 동작합니다. 전체 스택으로 확인하려면
+> 위 [Docker로 실행하기](#docker로-실행하기)의 `docker compose up`을 쓰세요.
+
+이미지 목록은 저장소의 **Packages** 탭(`https://github.com/jeonchaerim/schedule-api/pkgs/container/schedule-api`)에서 확인할 수 있습니다.
+
+상단의 CI 배지가 `passing`이면 `main` 브랜치의 최신 커밋이 빌드·테스트·배포를
+모두 통과했다는 뜻입니다.
 
 ## API 명세
 
@@ -306,5 +340,9 @@ Service·Repository·Controller 세 계층 모두 테스트를 작성했습니�
 | `@MockBean` 클래스 없음 (컴파일 불가) | Spring Boot 4.1에서 제거됨 | `@MockitoBean`으로 대체 |
 | docker compose가 `app` 이미지를 못 찾음 | 한글 폴더명이 자동 생성 프로젝트 이름을 깨뜸 | `docker-compose.yml`에 `name` 명시 |
 | arm64에서 실행 스테이지 이미지 pull 실패 | `eclipse-temurin:17-jre-alpine`의 arm64 매니페스트 누락 | `eclipse-temurin:17-jre-jammy`로 교체 |
+| deploy가 테스트 실패해도 실행될 수 있음 | 커스텀 `if`가 `needs`의 기본 성공 게이트를 대체 | `if: success() && ...`로 명시 |
+| CD 매번 전체 재빌드 | Docker 레이어 캐시 없음 | `cache-from`/`cache-to: type=gha` |
+| 이미지 태그 대소문자 이슈 가능성 | `github.repository`를 변환 없이 사용 | 소문자 변환 step 추가 |
+| 로컬(arm64)에서 배포 이미지 실행 실패 | CI 러너(amd64)로만 빌드됨 | QEMU + `platforms: linux/amd64,linux/arm64` |
 
 각 항목의 원인 분석과 검증 과정은 **[docs/troubleshooting.md](docs/troubleshooting.md)** 에 정리했습니다.
