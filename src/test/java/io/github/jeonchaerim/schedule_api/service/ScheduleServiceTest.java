@@ -6,6 +6,8 @@ import io.github.jeonchaerim.schedule_api.domain.Schedule;
 import io.github.jeonchaerim.schedule_api.dto.ScheduleCreateRequest;
 import io.github.jeonchaerim.schedule_api.dto.ScheduleResponse;
 import io.github.jeonchaerim.schedule_api.dto.ScheduleUpdateRequest;
+import io.github.jeonchaerim.schedule_api.exception.LockAcquisitionException;
+import io.github.jeonchaerim.schedule_api.exception.ScheduleConflictException;
 import io.github.jeonchaerim.schedule_api.repository.CategoryRepository;
 import io.github.jeonchaerim.schedule_api.repository.MemberRepository;
 import io.github.jeonchaerim.schedule_api.repository.ScheduleRepository;
@@ -15,15 +17,20 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -37,6 +44,10 @@ class ScheduleServiceTest {
     private CategoryRepository categoryRepository;
     @Mock
     private ScheduleRepository scheduleRepository;
+    @Mock
+    private RedissonClient redissonClient;
+    @Mock
+    private RLock rLock;
 
     @InjectMocks
     private ScheduleService scheduleService;
@@ -68,8 +79,8 @@ class ScheduleServiceTest {
     }
 
     @Test
-    @DisplayName("create: 회원과 카테고리가 존재하면 일정을 생성하고 id를 반환한다")
-    void create_success() {
+    @DisplayName("create: 회원과 카테고리가 존재하고 겹치는 일정이 없으면 생성하고 id를 반환한다")
+    void create_success() throws InterruptedException {
         Member member = Member.builder().email("test@test.com").name("테스터").build();
         ReflectionTestUtils.setField(member, "id", 1L);
 
@@ -94,15 +105,74 @@ class ScheduleServiceTest {
 
         given(memberRepository.findById(member.getId())).willReturn(Optional.of(member));
         given(categoryRepository.findById(category.getId())).willReturn(Optional.of(category));
+        given(redissonClient.getLock(anyString())).willReturn(rLock);
+        given(rLock.tryLock(anyLong(), anyLong(), any(TimeUnit.class))).willReturn(true);
+        given(rLock.isHeldByCurrentThread()).willReturn(true);
+        given(scheduleRepository.existsOverlapping(anyLong(), any(), any())).willReturn(false);
         given(scheduleRepository.save(any(Schedule.class))).willReturn(saved);
 
         Long resultId = scheduleService.create(request);
 
         assertThat(resultId).isEqualTo(10L);
+        // 단위 테스트에는 실제 트랜잭션이 없어 unlockAfterCommit()의 else 분기(즉시 unlock)를 타게 됨 —
+        // 커밋 이후로 미루는 분기(if, TransactionSynchronization)는 실제 트랜잭션이 필요해 concurrencyTest에서 검증
+        verify(rLock).unlock();
     }
 
     @Test
-    @DisplayName("create: 존재하지 않는 회원 id면 IllegalArgumentException이 발생한다")
+    @DisplayName("create: 겹치는 시간대의 일정이 이미 있으면 ScheduleConflictException이 발생하고 저장하지 않는다")
+    void create_overlapping_throwsScheduleConflictException() throws InterruptedException {
+        Member member = Member.builder().email("test@test.com").name("테스터").build();
+        ReflectionTestUtils.setField(member, "id", 1L);
+
+        ScheduleCreateRequest request = new ScheduleCreateRequest(
+                "팀 회의", "주간 회의",
+                LocalDateTime.of(2026, 8, 26, 10, 0),
+                LocalDateTime.of(2026, 8, 26, 11, 0),
+                member.getId(), null);
+
+        given(memberRepository.findById(member.getId())).willReturn(Optional.of(member));
+        given(redissonClient.getLock(anyString())).willReturn(rLock);
+        given(rLock.tryLock(anyLong(), anyLong(), any(TimeUnit.class))).willReturn(true);
+        given(rLock.isHeldByCurrentThread()).willReturn(true);
+        given(scheduleRepository.existsOverlapping(anyLong(), any(), any())).willReturn(true);
+
+        assertThatThrownBy(() -> scheduleService.create(request))
+                .isInstanceOf(ScheduleConflictException.class)
+                .hasMessageContaining("1");
+
+        verify(scheduleRepository, never()).save(any());
+        // 예외로 빠져나가도 finally에서 락은 반드시 풀려야 함
+        verify(rLock).unlock();
+    }
+
+    @Test
+    @DisplayName("create: 락을 제한 시간 안에 못 잡으면 LockAcquisitionException이 발생하고 겹침 조회조차 하지 않는다")
+    void create_lockNotAcquired_throwsLockAcquisitionException() throws InterruptedException {
+        Member member = Member.builder().email("test@test.com").name("테스터").build();
+        ReflectionTestUtils.setField(member, "id", 1L);
+
+        ScheduleCreateRequest request = new ScheduleCreateRequest(
+                "팀 회의", "주간 회의",
+                LocalDateTime.of(2026, 8, 26, 10, 0),
+                LocalDateTime.of(2026, 8, 26, 11, 0),
+                member.getId(), null);
+
+        given(memberRepository.findById(member.getId())).willReturn(Optional.of(member));
+        given(redissonClient.getLock(anyString())).willReturn(rLock);
+        given(rLock.tryLock(anyLong(), anyLong(), any(TimeUnit.class))).willReturn(false);
+
+        assertThatThrownBy(() -> scheduleService.create(request))
+                .isInstanceOf(LockAcquisitionException.class);
+
+        verify(scheduleRepository, never()).existsOverlapping(any(), any(), any());
+        verify(scheduleRepository, never()).save(any());
+        // 애초에 락을 못 잡았으니 unlock()도 호출되면 안 됨
+        verify(rLock, never()).unlock();
+    }
+
+    @Test
+    @DisplayName("create: 존재하지 않는 회원 id면 락을 잡기 전에 IllegalArgumentException이 발생한다")
     void create_memberNotFound_throwsException() {
         ScheduleCreateRequest request = new ScheduleCreateRequest(
                 "팀 회의", "주간 회의",

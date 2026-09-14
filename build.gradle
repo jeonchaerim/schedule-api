@@ -23,6 +23,7 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
 	implementation 'org.springframework.boot:spring-boot-starter-data-redis'
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'   // Docker 헬스체크용 /actuator/health
+	implementation 'org.redisson:redisson:4.7.0'   // 분산락 — spring-boot-starter-data-redis(캐시용 Lettuce)와는 별개 클라이언트
 	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.5'
 	compileOnly 'org.projectlombok:lombok'
 	runtimeOnly 'com.h2database:h2'   // local 프로필(테스트 포함)
@@ -36,5 +37,18 @@ dependencies {
 }
 
 tasks.named('test') {
-	useJUnitPlatform()
+	useJUnitPlatform {
+		excludeTags 'concurrency'   // 실제 Redis가 필요한 동시성 재현 테스트는 기본 test에서 제외
+	}
+}
+
+// 분산락 전/후 동시성 재현 테스트 — 실제 Redis가 떠있어야 함 (docker-compose up 또는 redis-server)
+tasks.register('concurrencyTest', Test) {
+	testClassesDirs = sourceSets.test.output.classesDirs   // tasks.register(Test)는 test 소스셋을 자동으로 안 물려받음
+	classpath = sourceSets.test.runtimeClasspath
+	useJUnitPlatform {
+		includeTags 'concurrency'
+	}
+	group = 'verification'
+	description = 'Redisson 분산락 적용 전/후 동시성 재현 테스트 (Redis 필요, 수동 실행)'
 }

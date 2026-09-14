@@ -628,3 +628,108 @@ QEMU 에뮬레이션을 등록해 amd64 러너에서도 arm64용 레이어를 �
 **CI 러너의 아키텍처와 최종 사용자의 아키텍처는 다를 수 있으므로, 여러
 환경에 배포할 이미지는 처음부터 멀티 아키텍처로 빌드해야 한다**는 것을
 실제 로컬 검증으로 확인한 사례입니다.
+
+---
+
+### 17. 동시성 제어 — Redisson 분산락으로 일정 중복 등록 방지
+
+**문제 상황**
+
+`ScheduleService.create()`는 겹치는 시간대인지 검증하지 않고, 동시성
+제어도 없이 그냥 저장만 했습니다. 같은 회원이 같은 시간대에 일정 등록을
+동시에 여러 번 요청하면(예: 더블클릭, 재시도 로직, 여러 탭) 서버 인스턴스가
+여러 요청을 동시에 처리하면서 겹치는 일정이 중복으로 저장될 수 있는
+경합 조건(race condition)이었습니다.
+
+**재현 방법**
+
+`ScheduleConcurrencyWithoutLockTest`에서, 겹침 검사·락 없이
+`ScheduleRepository.save()`만 스레드 10개로 동시에 호출해 같은 회원의
+같은 시간대 일정을 등록했습니다.
+
+```
+결과: 10개 요청이 전부 성공 → 겹치는 일정 10건이 그대로 중복 저장됨
+```
+
+**락 적용**
+
+Redisson으로 회원 단위 분산락을 걸고, 락을 잡은 상태에서만 겹침을
+검증·저장하도록 `create()`를 수정했습니다.
+
+```java
+RLock lock = redissonClient.getLock("schedule-lock:member:" + memberId);
+if (!lock.tryLock(3, 5, TimeUnit.SECONDS)) {
+    throw new LockAcquisitionException(...);   // 409
+}
+try {
+    if (scheduleRepository.existsOverlapping(memberId, startAt, endAt)) {
+        throw new ScheduleConflictException(...);   // 409
+    }
+    // 검증 통과 후에만 저장
+} finally {
+    unlockAfterCommit(lock);   // 커밋 이후에만 unlock (아래 "발견 2" 참고)
+}
+```
+
+**락 키를 "memberId + 겹치는 시간대"로 정확히 담지 못하는 이유** — Redis
+락은 정확히 같은 문자열 키끼리만 서로를 막아줍니다. "겹치는 시간대"는
+09:00~10:00과 09:30~10:30처럼 시작/끝 값이 달라도 겹칠 수 있는 구간
+조건이라, 그 값 자체를 락 키에 넣으면 두 요청이 서로 다른 키를 갖게
+되어 락이 무의미해집니다. 그래서 락의 범위는 "회원 단위"로 단순화하고,
+실제 "겹치는지" 판단은 락을 잡은 상태에서 DB 쿼리(`existsOverlapping`)로
+정확히 검증하도록 역할을 나눴습니다.
+
+**전/후 비교 결과**
+
+`ScheduleConcurrencyWithLockTest`로 동일한 조건(스레드 10개, 같은 회원,
+같은 시간대)을 재현했습니다.
+
+| | 성공 | 막힘(충돌/락대기초과) | 실제 저장된 행 | 소요 시간 (테스트 메서드 실행 시간) |
+| --- | --- | --- | --- | --- |
+| 락 적용 전 | 10 | 0 | **10건 (중복)** | 0.376초 |
+| 락 적용 후 | 1 | 9 | **1건** | 5.488초 |
+
+(`./gradlew concurrencyTest` 실행 후 `build/test-results/concurrencyTest/TEST-*.xml`의
+`testcase` `time` 속성으로 측정한 실제 값입니다. Spring 컨텍스트 부팅 시간은
+제외한, 테스트 메서드 본문만의 실행 시간입니다.)
+
+락을 걸면서 응답 시간이 늘어난 게(0.376초 → 5.488초) 눈에 띄는데, 이건
+**정확성과 처리량(throughput)을 맞바꾼 것**입니다 — 같은 회원에게
+동시에 몰린 요청 10개가 순서대로 하나씩만 처리되도록 강제로 직렬화했기
+때문에 늘어난 시간이고, 겹치는 일정이 중복 저장되는 것보다는 낫다고
+판단했습니다. 서로 다른 회원의 요청은 락 키가 달라서 이 직렬화의 영향을
+받지 않습니다.
+
+**개발 중 발견 1 — Redisson은 Lettuce와 달리 빈 생성 시점에 즉시 연결을 시도함**
+
+Redisson 도입 후 `./gradlew test`를 Redis 없이 돌려봤더니(CI와 동일한
+조건), `ScheduleApiApplicationTests`가 `RedisConnectionException`으로
+실패했습니다. 캐시에 쓰는 Lettuce(spring-boot-starter-data-redis)는
+연결을 지연시켜서 지금까지 Redis 없이도 컨텍스트가 잘 떴는데, Redisson은
+`RedissonClient` 빈을 만드는 순간 바로 연결을 시도해서 실패하면 그
+자리에서 예외를 던졌습니다.
+
+`@Lazy`를 `RedissonConfig`의 빈 정의와 `ScheduleService`의 주입부
+양쪽에 붙여서, 실제로 락을 처음 쓰는 시점(`create()` 호출 시)까지
+연결을 미뤘습니다. 다만 `@RequiredArgsConstructor`는 필드의 `@Lazy`를
+생성자 파라미터까지 기본적으로 복사해주지 않아서, `lombok.config`에
+`lombok.copyableAnnotations += org.springframework.context.annotation.Lazy`를
+추가해야 했습니다.
+
+**개발 중 발견 2 — 락 해제를 finally에서 바로 하면 안 됨**
+
+처음엔 `finally { lock.unlock(); }`으로 짰는데, `create()`가
+`@Transactional`이라는 걸 놓쳤습니다. 실제 커밋은 메서드가 끝난 뒤
+(스프링이 씌운 프록시 바깥에서) 일어나는데, `finally`에서 곧장
+`unlock()`하면 **커밋되기도 전에 락이 풀려서**, 그 틈에 다음 스레드가
+락을 잡고 겹침을 조회하면 방금 저장한(아직 커밋 전이라 안 보이는) 행을
+못 보고 "안 겹친다"고 잘못 판단해 또 저장해버릴 수 있었습니다 — 락을
+걸어놓고도 원래 버그가 그대로 재현될 뻔한 지점입니다.
+
+`TransactionSynchronizationManager.registerSynchronization()`으로
+`afterCompletion` 콜백을 등록해서, 트랜잭션이 실제로 끝난 뒤(커밋이든
+롤백이든)에만 락을 풀도록 고쳤습니다.
+
+**"분산락으로 동시 접근을 막았다"는 것과 "그 락이 트랜잭션 커밋과
+올바른 순서로 해제된다"는 것은 별개의 문제이고, 둘 다 맞아야 실제로
+안전하다**는 것을 이번 기능에서 직접 확인했습니다.

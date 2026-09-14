@@ -4,7 +4,9 @@ import io.github.jeonchaerim.schedule_api.domain.Member;
 import io.github.jeonchaerim.schedule_api.domain.Schedule;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 public interface ScheduleRepository extends JpaRepository<Schedule, Long> {
@@ -13,6 +15,17 @@ public interface ScheduleRepository extends JpaRepository<Schedule, Long> {
             "join fetch s.member " +
             "left join fetch s.category")
     List<Schedule> findAllWithMemberAndCategory();
+
+    // 겹침 판정: 기존.startAt < 새.endAt AND 기존.endAt > 새.startAt (표준 구간 겹침 조건)
+    // 딱 맞닿는 경우(10:00~11:00, 11:00~12:00)는 안 겹치는 걸로 처리됨(부등호가 등호 없이 strict)
+    @Query("select case when count(s) > 0 then true else false end " +
+            "from Schedule s " +
+            "where s.member.id = :memberId " +
+            "and s.startAt < :endAt " +
+            "and s.endAt > :startAt")
+    boolean existsOverlapping(@Param("memberId") Long memberId,
+                               @Param("startAt") LocalDateTime startAt,
+                               @Param("endAt") LocalDateTime endAt);
 
     /*
     // 레포지토리 작성 방식 3가지

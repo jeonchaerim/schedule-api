@@ -19,6 +19,7 @@ JPA가 실제로 어떤 쿼리를 생성하는지 확인하기 위해 만든 프
 - 회원·카테고리 연관관계 매핑 (카테고리는 선택 항목)
 - 지연 로딩 / Fetch Join 조회를 별도 엔드포인트로 분리해 성능 비교
 - Redis 캐시 적용 및 데이터 변경 시 캐시 무효화
+- Redisson 분산락으로 일정 등록 시 동시성 제어 (겹치는 시간대 중복 등록 방지)
 - Swagger 기반 API 문서 자동화
 - GitHub Actions로 테스트 자동 실행(CI) + 통과 시 멀티 아키텍처 Docker
   이미지를 GHCR에 자동 배포(CD)
@@ -31,6 +32,7 @@ JPA가 실제로 어떤 쿼리를 생성하는지 확인하기 위해 만든 프
 | Framework | Spring Boot 4.1, Spring Data JPA |
 | Database | H2 in-memory (local 프로필) / PostgreSQL (docker 프로필) |
 | Cache | Redis |
+| 분산락 | Redisson |
 | Docs | springdoc-openapi (Swagger UI) |
 | Build | Gradle 9.5 |
 | Container | Docker, Docker Compose |
@@ -220,8 +222,10 @@ Service·Repository·Controller 세 계층 모두 테스트를 작성했습니�
 | 대상 | 케이스 | 검증 내용 |
 | --- | --- | --- |
 | `findAll` / `findAllWithFetch` | 정상 | Schedule을 ScheduleResponse로 매핑 |
-| `create` | 정상 | 회원·카테고리 조회 후 저장, id 반환 |
-| `create` | 예외 | 존재하지 않는 회원 id면 `IllegalArgumentException` |
+| `create` | 정상 | 락 획득 → 겹침 없음 → 저장, id 반환, `unlock()` 호출 |
+| `create` | 예외 | 겹치는 시간대 존재 시 `ScheduleConflictException` (+ `unlock()` 호출 확인) |
+| `create` | 예외 | 락 획득 실패 시 `LockAcquisitionException`, 겹침 조회·`unlock()` 모두 호출 안 됨 |
+| `create` | 예외 | 존재하지 않는 회원 id면 락을 잡기 전에 `IllegalArgumentException` |
 | `update` | 정상 | categoryId 없으면 카테고리 제거, `save()` 미호출(Dirty Checking) |
 | `update` | 예외 | 존재하지 않는 일정 id면 `IllegalArgumentException` |
 | `delete` | 예외 | 존재하지 않는 일정 id면 `IllegalArgumentException` |
@@ -243,6 +247,19 @@ Service·Repository·Controller 세 계층 모두 테스트를 작성했습니�
 | `POST /schedules` | id 반환 (200) | 기간 검증 실패 시 400 + 에러 메시지 |
 | `PUT /schedules/{id}` | 200 | 존재하지 않는 id면 400 + 에러 메시지 |
 | `DELETE /schedules/{id}` | 200 | 존재하지 않는 id면 400 + 에러 메시지 |
+
+**동시성 재현 테스트** — 실제 Redis 필요, 기본 `./gradlew test`에서는 제외됨 (`@Tag("concurrency")`)
+
+```bash
+./gradlew concurrencyTest   # docker-compose up 등으로 Redis가 떠있는 상태에서 실행
+```
+
+| 테스트 | 시나리오 | 결과 |
+| --- | --- | --- |
+| `ScheduleConcurrencyWithoutLockTest` | 락 없이 스레드 10개가 동시에 같은 회원·시간대로 저장 | 10건 전부 저장(중복 재현) |
+| `ScheduleConcurrencyWithLockTest` | 분산락 적용 후 동일 조건으로 `ScheduleService.create()` 호출 | 1건만 저장, 나머지 9개는 충돌/락대기초과로 차단 |
+
+전/후 비교의 원인 분석은 [docs/troubleshooting.md](docs/troubleshooting.md) 17번 항목에 정리했습니다.
 
 ## CI/CD
 
@@ -293,7 +310,7 @@ curl http://localhost:8080/actuator/health
 | --- | --- | --- |
 | GET | `/schedules` | 일정 목록 조회 — 지연 로딩 (N+1 발생) |
 | GET | `/schedules/fetch` | 일정 목록 조회 — Fetch Join + Redis 캐시 |
-| POST | `/schedules` | 일정 등록 |
+| POST | `/schedules` | 일정 등록 — 회원 단위 분산락으로 동시 등록 시 겹치는 시간대 중복 방지 |
 | PUT | `/schedules/{id}` | 일정 수정 — Dirty Checking |
 | DELETE | `/schedules/{id}` | 일정 삭제 |
 
@@ -303,7 +320,13 @@ curl http://localhost:8080/actuator/health
 
 **예외 응답**
 
-잘못된 요청은 `@RestControllerAdvice`에서 400으로 변환됩니다.
+모두 `@RestControllerAdvice`에서 변환됩니다.
+
+| 예외 | 상태 코드 | 발생 상황 |
+| --- | --- | --- |
+| `IllegalArgumentException` | 400 | 존재하지 않는 회원/카테고리/일정 id, 잘못된 기간 |
+| `ScheduleConflictException` | 409 | 회원의 겹치는 시간대에 이미 일정 존재 |
+| `LockAcquisitionException` | 409 | 분산락을 제한 시간(3초) 안에 획득하지 못함 |
 
 ```json
 { "message": "일정을 찾을 수 없습니다. id=99999" }
@@ -344,5 +367,8 @@ curl http://localhost:8080/actuator/health
 | CD 매번 전체 재빌드 | Docker 레이어 캐시 없음 | `cache-from`/`cache-to: type=gha` |
 | 이미지 태그 대소문자 이슈 가능성 | `github.repository`를 변환 없이 사용 | 소문자 변환 step 추가 |
 | 로컬(arm64)에서 배포 이미지 실행 실패 | CI 러너(amd64)로만 빌드됨 | QEMU + `platforms: linux/amd64,linux/arm64` |
+| 동시 등록 시 겹치는 일정이 중복 저장 | 검증·락 없는 경합 조건 | Redisson 분산락 + `existsOverlapping` |
+| Redis 없이 테스트하면 컨텍스트 로딩 실패 | Redisson은 빈 생성 시 즉시 연결 시도 | 빈·주입부 양쪽에 `@Lazy` |
+| 락을 걸어도 중복 저장 가능성 남음 | `finally`에서 커밋 전에 `unlock()` | 커밋 후(`afterCompletion`)에 unlock |
 
 각 항목의 원인 분석과 검증 과정은 **[docs/troubleshooting.md](docs/troubleshooting.md)** 에 정리했습니다.

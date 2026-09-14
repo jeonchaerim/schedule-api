@@ -506,3 +506,55 @@ where schedule_id=?
 - 컨테이너를 Redis/Postgres 없이 단독으로 띄우면 `/actuator/health`가
   DOWN으로 나오는 게 정상 — Redis 연결 실패 스택트레이스가 이유였고,
   API 자체(`/schedules`)는 별개로 정상 응답함
+
+
+---
+2026-09-12 (토) — Redisson 분산락으로 동시성 제어
+---
+
+### 한 것
+- ScheduleService.create()에 Redisson 분산락 적용 — 같은 회원이 겹치는
+  시간대에 일정을 동시 등록하면 하나만 저장되게 함
+  - 락 키는 "회원 단위"(`schedule-lock:member:{memberId}`)로 단순화,
+    실제 겹침 판정은 락 안에서 DB 쿼리(existsOverlapping)로 검증
+  - tryLock(대기 3초, 점유 5초), 실패 시 LockAcquisitionException(409),
+    겹침 발견 시 ScheduleConflictException(409)
+- 락 적용 전/후 동시성 재현 테스트 2개 작성 (스레드 10개로 동시 등록)
+  - concurrency 태그로 묶어 기본 ./gradlew test에서는 제외, 별도
+    concurrencyTest Gradle 태스크로 수동 실행(Redis 필요)
+- ScheduleServiceTest의 create 관련 테스트에 RedissonClient/RLock mock
+  추가, unlock() 호출 여부까지 검증하는 테스트 보강
+- README/troubleshooting.md(17번) 동기화
+
+### 배운 것
+- Redis 락은 정확히 같은 문자열 키끼리만 서로 막아줌 — "겹치는 시간대"
+  처럼 시작/끝 값이 달라도 겹칠 수 있는 "구간" 조건은 락 키에 그대로
+  못 담음(두 요청이 다른 키를 가져서 락이 무의미해짐). 그래서 락은
+  "회원 단위"로 걸고, 정확한 겹침 판정은 락 안에서 DB로 따로 검증하는
+  방식으로 역할을 나눠야 함
+- Redisson(RedissonClient)은 캐시용 Lettuce와 달리 빈을 만드는 시점에
+  즉시 Redis에 연결을 시도함 → Redis 없이 테스트 돌리면 컨텍스트 전체가
+  못 뜸(RedisConnectionException) → 빈 정의와 주입부 양쪽에 @Lazy를
+  붙여서 실제 사용 시점까지 연결을 미룸
+- @RequiredArgsConstructor는 필드의 @Lazy를 생성자 파라미터까지 기본
+  복사해주지 않음 — lombok.config에 lombok.copyableAnnotations 설정을
+  추가해야 실제로 지연 주입이 됨
+- @Transactional 메서드 안에서 분산락을 쓸 때는 "언제 unlock하느냐"가
+  핵심 — finally에서 바로 unlock하면, 실제 커밋(메서드가 끝난 뒤 프록시
+  바깥에서 일어남)보다 락 해제가 먼저 일어나서, 그 틈에 다음 스레드가
+  아직 안 보이는(커밋 전) 데이터를 못 보고 똑같이 통과해버릴 수 있음
+  → TransactionSynchronizationManager로 커밋 완료 후에만 unlock하도록
+  등록해야 안전함. "락을 걸었다"와 "그 락이 트랜잭션과 올바른 순서로
+  풀린다"는 별개의 문제
+- 유닛 테스트에서 mock RLock의 isHeldByCurrentThread()는 기본값 false라,
+  stub 안 하면 unlock() 관련 로직이 하나도 검증되지 않고 그냥 통과함
+  (코드리뷰로 발견 — 세 테스트에 isHeldByCurrentThread() stub과
+  verify(rLock).unlock() 추가해서 보강)
+
+### 애로사항
+- 락 없이 재현 테스트 → 락 적용 후 검증까지는 순조로웠는데, Redis 없이
+  전체 테스트를 돌려보니(CI 조건 재현) RedissonClient 빈 생성부터 실패함
+  → @Lazy로 해결(위 "배운 것" 참고)
+- 실제 락 적용 후 테스트가 락 없을 때보다 훨씬 느려짐(0.3초 → 7초,
+  스레드 10개 순차 처리) — 버그가 아니라 "직렬화의 대가"였음, 트러블슈팅
+  문서에 트레이드오프로 기록
