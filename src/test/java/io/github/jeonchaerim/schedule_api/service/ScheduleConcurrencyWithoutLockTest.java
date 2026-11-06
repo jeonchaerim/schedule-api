@@ -59,7 +59,7 @@ class ScheduleConcurrencyWithoutLockTest {
 
         for (int i = 0; i < THREAD_COUNT; i++) {
             int idx = i;
-            executorService.submit(() -> {
+            executorService.submit(() -> {   // 스레드풀 대기열에 작업을 넣음
                 readyLatch.countDown();
                 try {
                     startLatch.await();   // 스레드 전부가 동시에 출발하도록 대기
@@ -81,13 +81,20 @@ class ScheduleConcurrencyWithoutLockTest {
         }
 
         readyLatch.await();
+        long startNanos = System.nanoTime();   // 스레드 10개가 실제로 동시에 출발하는 시점부터 측정
         startLatch.countDown();
         doneLatch.await(10, TimeUnit.SECONDS);
+        long elapsedMillis = (System.nanoTime() - startNanos) / 1_000_000;
         executorService.shutdown();
 
         long savedCount = scheduleRepository.findAll().stream()
                 .filter(s -> s.getMember().getId().equals(member.getId()))
                 .count();
+
+        System.out.println("==================== 동시성 테스트 (락 없음) ====================");
+        System.out.printf("동시 요청 %d건 / 저장된 일정 %d건 (중복 저장 %d건) / 소요 시간 %d ms%n",
+                THREAD_COUNT, savedCount, savedCount - 1, elapsedMillis);
+        System.out.println("================================================================");
 
         // 막는 게 없으니 THREAD_COUNT개 요청이 전부 성공해서 그대로 다 저장됨 — 재현하려던 문제
         assertThat(savedCount).isEqualTo(THREAD_COUNT);

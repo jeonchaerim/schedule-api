@@ -86,13 +86,20 @@ class ScheduleConcurrencyWithLockTest {
         }
 
         readyLatch.await();
+        long startNanos = System.nanoTime();   // 스레드 10개가 실제로 동시에 출발하는 시점부터 측정
         startLatch.countDown();
         doneLatch.await(30, TimeUnit.SECONDS);
+        long elapsedMillis = (System.nanoTime() - startNanos) / 1_000_000;
         executorService.shutdown();
 
         long savedCount = scheduleRepository.findAll().stream()
                 .filter(s -> s.getMember().getId().equals(member.getId()))
                 .count();
+
+        System.out.println("==================== 동시성 테스트 (락 적용) ====================");
+        System.out.printf("동시 요청 %d건 / 성공 %d건 / 차단(충돌·락대기초과) %d건 / 저장된 일정 %d건 / 소요 시간 %d ms%n",
+                THREAD_COUNT, successCount.get(), blockedCount.get(), savedCount, elapsedMillis);
+        System.out.println("================================================================");
 
         assertThat(successCount.get()).isEqualTo(1);
         assertThat(blockedCount.get()).isEqualTo(THREAD_COUNT - 1);

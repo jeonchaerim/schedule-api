@@ -49,6 +49,7 @@ tasks.register('concurrencyTest', Test) {
 	useJUnitPlatform {
 		includeTags 'concurrency'
 	}
+	testLogging.showStandardStreams = true   // 테스트 안의 System.out(성공/차단/저장 건수 요약)을 콘솔에 그대로 출력
 	group = 'verification'
 	description = 'Redisson 분산락 적용 전/후 동시성 재현 테스트 (Redis 필요, 수동 실행)'
 }
