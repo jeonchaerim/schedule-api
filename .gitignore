@@ -40,3 +40,6 @@ out/
 
 ### Docker ###
 .env
+
+# 부하 테스트 요청별 원본 로그 (누적 결과 results.csv는 추적)
+loadtest/results/*.log
